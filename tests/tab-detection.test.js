@@ -10,7 +10,6 @@ test("shouldIgnoreCreatedTab enforces all ignore guards", () => {
   const baseContext = {
     enabled: true,
     ignoredTabIds: new Set([99]),
-    activePopupWindowId: 50,
   };
 
   const normalNewTab = {
@@ -48,10 +47,6 @@ test("shouldIgnoreCreatedTab enforces all ignore guards", () => {
   );
   assert.equal(
     shouldIgnoreCreatedTab({ ...normalNewTab, id: 99 }, baseContext),
-    true
-  );
-  assert.equal(
-    shouldIgnoreCreatedTab({ ...normalNewTab, windowId: 50 }, baseContext),
     true
   );
 });

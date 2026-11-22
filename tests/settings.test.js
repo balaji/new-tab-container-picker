@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
-  STORAGE_KEY_ENABLED,
+  STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
   normalizeSettings,
   saveSettings,
@@ -13,15 +13,14 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
   assert.deepEqual(normalizeSettings(undefined), DEFAULT_SETTINGS);
   assert.deepEqual(normalizeSettings(null), DEFAULT_SETTINGS);
   assert.deepEqual(normalizeSettings("invalid"), DEFAULT_SETTINGS);
-
-  assert.deepEqual(normalizeSettings({ [STORAGE_KEY_ENABLED]: false }), {
-    enabled: false,
+  assert.deepEqual(DEFAULT_SETTINGS, {
+    openOnNewTab: false,
     autoOpenSingleMatch: false,
   });
 
   assert.deepEqual(
     normalizeSettings({
-      [STORAGE_KEY_ENABLED]: "yes",
+      [STORAGE_KEY_OPEN_ON_NEW_TAB]: "yes",
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: 1,
     }),
     DEFAULT_SETTINGS
@@ -29,11 +28,11 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
 
   assert.deepEqual(
     normalizeSettings({
-      [STORAGE_KEY_ENABLED]: false,
+      [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
     }),
     {
-      enabled: false,
+      openOnNewTab: true,
       autoOpenSingleMatch: true,
     }
   );
@@ -43,33 +42,30 @@ test("loadSettings reads storage keys safely and falls back to defaults on error
   assert.deepEqual(await loadSettings(undefined), DEFAULT_SETTINGS);
 
   let requestedKeys = null;
-  const partialStorage = {
+  const storage = {
     async get(keys) {
       requestedKeys = keys;
-      return { [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true };
-    },
-  };
-  assert.deepEqual(await loadSettings(partialStorage), {
-    enabled: true,
-    autoOpenSingleMatch: true,
-  });
-  assert.deepEqual(requestedKeys, [
-    STORAGE_KEY_ENABLED,
-    STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
-  ]);
-
-  const populatedStorage = {
-    async get() {
       return {
-        [STORAGE_KEY_ENABLED]: false,
+        [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
         [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
       };
     },
   };
-  assert.deepEqual(await loadSettings(populatedStorage), {
-    enabled: false,
+  assert.deepEqual(await loadSettings(storage), {
+    openOnNewTab: true,
     autoOpenSingleMatch: true,
   });
+  assert.deepEqual(requestedKeys, [
+    STORAGE_KEY_OPEN_ON_NEW_TAB,
+    STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  ]);
+
+  const emptyStorage = {
+    async get() {
+      return {};
+    },
+  };
+  assert.deepEqual(await loadSettings(emptyStorage), DEFAULT_SETTINGS);
 
   const failingStorage = {
     async get() {
@@ -79,8 +75,11 @@ test("loadSettings reads storage keys safely and falls back to defaults on error
   assert.deepEqual(await loadSettings(failingStorage), DEFAULT_SETTINGS);
 });
 
-test("saveSettings persists only known boolean keys and ignores invalid/unknown entries", async () => {
-  assert.equal(await saveSettings(undefined, { enabled: false }), false);
+test("saveSettings persists valid boolean keys and ignores invalid or unknown entries", async () => {
+  assert.equal(
+    await saveSettings(undefined, { autoOpenSingleMatch: true }),
+    false
+  );
   assert.equal(await saveSettings({ set() {} }, null), false);
 
   const writes = [];
@@ -93,7 +92,7 @@ test("saveSettings persists only known boolean keys and ignores invalid/unknown 
   assert.equal(
     await saveSettings(mockStorage, {
       unknownKey: true,
-      [STORAGE_KEY_ENABLED]: "false",
+      [STORAGE_KEY_OPEN_ON_NEW_TAB]: "true",
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: 1,
     }),
     false
@@ -103,14 +102,14 @@ test("saveSettings persists only known boolean keys and ignores invalid/unknown 
   assert.equal(
     await saveSettings(mockStorage, {
       unknownKey: "ignored",
+      [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
-      [STORAGE_KEY_ENABLED]: false,
     }),
     true
   );
   assert.deepEqual(writes, [
     {
-      enabled: false,
+      openOnNewTab: true,
       autoOpenSingleMatch: true,
     },
   ]);

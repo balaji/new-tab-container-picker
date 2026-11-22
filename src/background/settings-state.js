@@ -1,69 +1,44 @@
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
-  STORAGE_KEY_ENABLED,
+  STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
 } from "../lib/settings.js";
-import { syncActionBadge } from "./browser-actions.js";
 
 /**
- * Manage extension settings state, storage persistence, and toolbar badge syncing.
+ * Manage extension settings state for background new-tab interception.
  * @param {object} browserApi
- * @param {{ onDisabled?: () => Promise<void> | void }} [callbacks]
  */
-export function createSettingsState(browserApi, { onDisabled } = {}) {
-  let enabled = DEFAULT_SETTINGS[STORAGE_KEY_ENABLED];
+export function createSettingsState(browserApi) {
+  let openOnNewTab = DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB];
   let autoOpenSingleMatch = DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
 
   /**
-   * Load persisted settings from local storage and sync the toolbar badge.
+   * Load persisted settings from local storage.
    * @returns {Promise<void>}
    */
   async function init() {
     const settings = await loadSettings(browserApi.storage?.local);
-    enabled = settings[STORAGE_KEY_ENABLED];
+    openOnNewTab = settings[STORAGE_KEY_OPEN_ON_NEW_TAB];
     autoOpenSingleMatch = settings[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
-    await syncActionBadge(browserApi.action, enabled);
   }
 
   /**
-   * Toggle the enabled setting, persist it, sync the badge, and notify when disabled.
-   * @returns {Promise<void>}
-   */
-  async function toggleEnabled() {
-    enabled = !enabled;
-    try {
-      await browserApi.storage?.local?.set({ [STORAGE_KEY_ENABLED]: enabled });
-    } catch {
-      // Continue updating runtime state & badge
-    }
-    await syncActionBadge(browserApi.action, enabled);
-    if (!enabled) {
-      await onDisabled?.();
-    }
-  }
-
-  /**
-   * Apply local storage setting updates and trigger side effects for enabled changes.
+   * Apply local storage setting updates.
    * @param {Record<string, { newValue?: unknown }>} changes
    * @param {string} areaName
-   * @returns {Promise<void>}
    */
-  async function handleStorageChanged(changes, areaName) {
+  function handleStorageChanged(changes, areaName) {
     if (areaName !== "local" || !changes) {
       return;
     }
 
-    if (STORAGE_KEY_ENABLED in changes) {
-      const next = changes[STORAGE_KEY_ENABLED]?.newValue;
-      enabled =
+    if (STORAGE_KEY_OPEN_ON_NEW_TAB in changes) {
+      const next = changes[STORAGE_KEY_OPEN_ON_NEW_TAB]?.newValue;
+      openOnNewTab =
         typeof next === "boolean"
           ? next
-          : DEFAULT_SETTINGS[STORAGE_KEY_ENABLED];
-      await syncActionBadge(browserApi.action, enabled);
-      if (!enabled) {
-        await onDisabled?.();
-      }
+          : DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB];
     }
 
     if (STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH in changes) {
@@ -77,9 +52,8 @@ export function createSettingsState(browserApi, { onDisabled } = {}) {
 
   return {
     init,
-    isEnabled: () => enabled,
-    getSettings: () => ({ enabled, autoOpenSingleMatch }),
-    toggleEnabled,
+    isNewTabModeEnabled: () => openOnNewTab,
+    getSettings: () => ({ openOnNewTab, autoOpenSingleMatch }),
     handleStorageChanged,
   };
 }

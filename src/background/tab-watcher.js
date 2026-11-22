@@ -9,7 +9,6 @@ export const DEFAULT_IGNORED_TAB_TTL_MS = 5000;
  * @param {object} browserApi
  * @param {{
  *   isEnabled?: () => boolean,
- *   getActivePopupWindowId?: () => number | null,
  *   onNewTabDetected?: (tab: object) => Promise<void> | void,
  *   pendingTimeoutMs?: number,
  *   ignoredTabTtlMs?: number,
@@ -17,7 +16,6 @@ export const DEFAULT_IGNORED_TAB_TTL_MS = 5000;
  */
 export function createTabWatcher(browserApi, deps = {}) {
   const isEnabled = deps.isEnabled ?? (() => true);
-  const getActivePopupWindowId = deps.getActivePopupWindowId ?? (() => null);
   const onNewTabDetected = deps.onNewTabDetected ?? (() => {});
   const pendingTimeoutMs = deps.pendingTimeoutMs ?? DEFAULT_PENDING_TIMEOUT_MS;
   const ignoredTabTtlMs = deps.ignoredTabTtlMs ?? DEFAULT_IGNORED_TAB_TTL_MS;
@@ -30,7 +28,6 @@ export function createTabWatcher(browserApi, deps = {}) {
     return shouldIgnoreCreatedTab(tab, {
       enabled: isEnabled(),
       ignoredTabIds,
-      activePopupWindowId: getActivePopupWindowId(),
     });
   }
 

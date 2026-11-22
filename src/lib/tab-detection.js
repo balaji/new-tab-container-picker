@@ -3,7 +3,7 @@ import { DEFAULT_COOKIE_STORE_ID } from "./containers.js";
 /**
  * Determine whether a newly created tab should be ignored by the container picker.
  * @param {object} tab
- * @param {{ enabled?: boolean, ignoredTabIds?: Set<number>, activePopupWindowId?: number | null }} context
+ * @param {{ enabled?: boolean, ignoredTabIds?: Set<number> }} [context]
  * @returns {boolean}
  */
 export function shouldIgnoreCreatedTab(tab, context = {}) {
@@ -28,13 +28,6 @@ export function shouldIgnoreCreatedTab(tab, context = {}) {
   }
 
   if (context.ignoredTabIds && context.ignoredTabIds.has(tab.id)) {
-    return true;
-  }
-
-  if (
-    context.activePopupWindowId != null &&
-    tab.windowId === context.activePopupWindowId
-  ) {
     return true;
   }
 

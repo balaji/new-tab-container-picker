@@ -39,7 +39,7 @@ export function sanitizeColorCode(colorCode, colorName) {
 }
 
 /**
- * Query Firefox contextualIdentities safely and prepend the transparent Default container.
+ * Query Firefox contextualIdentities safely and append the transparent Default container after Firefox containers.
  * Returns { enabled: false, containers: [] } when containers are unavailable, disabled, or empty.
  * @param {{ query?: (details: object) => Promise<unknown> } | undefined} api
  * @returns {Promise<{ enabled: boolean, containers: Array<object> }>}
@@ -82,6 +82,6 @@ export async function getAvailableContainers(api) {
 
   return {
     enabled: true,
-    containers: [defaultContainer, ...mapped],
+    containers: [...mapped, defaultContainer],
   };
 }

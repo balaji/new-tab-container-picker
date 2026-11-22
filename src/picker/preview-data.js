@@ -1,14 +1,5 @@
 export const PREVIEW_CONTAINERS = [
   {
-    cookieStoreId: "firefox-default",
-    name: "Default",
-    color: "transparent",
-    colorCode: null,
-    icon: null,
-    iconUrl: null,
-    isDefault: true,
-  },
-  {
     cookieStoreId: "firefox-container-1",
     name: "Personal",
     color: "blue",
@@ -43,5 +34,14 @@ export const PREVIEW_CONTAINERS = [
     icon: "cart",
     iconUrl: null,
     isDefault: false,
+  },
+  {
+    cookieStoreId: "firefox-default",
+    name: "Default",
+    color: "transparent",
+    colorCode: null,
+    icon: null,
+    iconUrl: null,
+    isDefault: true,
   },
 ];
