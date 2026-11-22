@@ -1,0 +1,16 @@
+{
+  "name": "new-tab-container-picker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Choose a Firefox Multi-Account Container via a quick searchable popup whenever you open a new tab.",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "lint": "web-ext lint --source-dir=. --ignore-files=package.json package-lock.json node_modules tests README.md .gitignore web-ext-artifacts",
+    "build": "web-ext build --source-dir=. --overwrite-dest --ignore-files=package.json package-lock.json node_modules tests README.md .gitignore web-ext-artifacts",
+    "start": "web-ext run --source-dir=. --ignore-files=package.json package-lock.json node_modules tests README.md .gitignore web-ext-artifacts"
+  },
+  "devDependencies": {
+    "web-ext": "^10.8.0"
+  }
+}
