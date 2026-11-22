@@ -2,14 +2,38 @@
 
 A lightweight **Manifest V3** Firefox extension for opening new tabs in any Firefox Multi-Account Container via a fast, keyboard-searchable picker — on demand with a customizable keyboard shortcut or toolbar button, and optionally directly inside every new tab (`Cmd+T` / `Ctrl+T`).
 
+## Why this exists?
+
+Firefox already provides a way to always ask for a container while opening a new tab, but it works only on mouse click, the option in settings is literally called `privacy.userContext.newTabContainerOnLeftClick.enabled`
+
+<center>Firefox settings for Container</center>
+
+![](./assets/firefox%20setting.png)
+
+<center>Container picker view on mouse click (Default behaviour)</center>
+
+![](./assets/default%20firefox%20behavior.png)
+
+This extension provides a way to use a shortcut of your own OR override the default cmd+T shortcut.
+
 ## Highlights
 
-- **Independent Activation Options (Coexist Seamlessly)**:
-  - **Keyboard shortcut & Toolbar Button** *(Always active)*: Press `Ctrl+Shift+Y` (`Command+Shift+Y` on macOS) or click the toolbar icon to open the native Firefox toolbar popup, leaving `Cmd+T` / `Ctrl+T` and `Cmd+Shift+T` / `Ctrl+Shift+T` untouched. Customize, reset, or clear the shortcut right in Preferences (synced with Firefox's **Manage Extension Shortcuts**). Uses minimal install permissions (`cookies`, `contextualIdentities`, `storage`).
-  - **Open picker on new tabs (`Cmd+T` / `Ctrl+T`)** *(Optional toggle, off by default)*: Opens the container picker directly inside new tabs (`+`, `Cmd+T`, `Ctrl+T`), requests optional `tabs` and `sessions` permissions on demand, and purges closed picker tabs from Recently Closed history so `Cmd+Shift+T` / `Ctrl+Shift+T` always reopens your last closed tab.
-- **Instant Keyboard Search & Navigation**: Opens focused on the search bar with exact, prefix, substring, and fuzzy matching. Navigate with `ArrowUp`/`ArrowDown` (or `Ctrl+P`/`Ctrl+N`) and select with `Enter` or click.
-- **Containers First**: Highlights your first configured container immediately on open and places **Default** (no container) at the bottom, using Firefox container colors and icons and adapting automatically to light and dark modes.
-- **Auto-Open & Graceful Fallback**: Optional **Auto-open on single search match** preference, plus clear guidance when Container Tabs are disabled or in Private Windows.
+- Open picker on new tabs through the default shortcut (`Cmd+T` / `Ctrl+T`) OR through a shortcut of your own choice.
+
+- Instant Keyboard Search & Navigation: Opens focused on the search bar with exact, prefix, substring, and fuzzy matching.
+
+<center>Overrides Cmd+T/Ctrl+T to show container picker</center>
+
+![](./assets/picker%20in%20new%20tab.png)
+
+<center>Settings page (automatically open the container when there is only one match)</center>
+
+![](./assets/settings.png)
+
+<center>Don't override cmd+T, instead use the toolbar icon via custom keyboard shortcut</center>
+
+![](./assets/picker%20via%20toolbar%20icon.png)
+
 
 ## Prerequisites
 
