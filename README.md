@@ -12,6 +12,7 @@ A lightweight **Manifest V3** Firefox extension that opens a fast, searchable co
   - Pressing `Escape`, clicking outside into Firefox, or clicking another tab dismisses the popup and keeps the new tab open as **Default**.
   - Switching to another app via `Cmd+Tab` / `Alt+Tab` preserves the popup until you switch back.
 - **Toolbar Toggle**: Click the extension's toolbar icon to pause/resume interception at any time (displays an `OFF` badge when paused).
+- **Extension Settings**: Open Preferences in Firefox via `about:addons` or the gear button in the picker footer to toggle new-tab interception or enable **Auto-open on single search match** (automatically opens the matching container tab without pressing `Enter` as soon as the search filter narrows down to one result).
 - **Graceful Fallback**: If Firefox Container Tabs are disabled or no containers are configured, new tabs open normally with zero interruption.
 
 ## Development & Testing

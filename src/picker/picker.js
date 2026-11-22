@@ -107,6 +107,7 @@ export async function createPickerController(deps = {}) {
   const listEl = doc.getElementById("container-list");
   const emptyStateEl = doc.getElementById("empty-state");
   const announcerEl = doc.getElementById("status-announcer");
+  const settingsBtn = doc.getElementById("open-settings");
 
   const params = new URLSearchParams(win.location?.search ?? "");
   const requestedSessionId = params.get("session") ?? "";
@@ -116,6 +117,8 @@ export async function createPickerController(deps = {}) {
   let allContainers = [];
   let filteredContainers = [];
   let activeIndex = 0;
+  let autoOpenSingleMatch = false;
+  let isComposing = false;
   let settled = false;
   let announceTimer = null;
 
@@ -229,6 +232,7 @@ export async function createPickerController(deps = {}) {
       return;
     }
     settled = true;
+    clearTimeout(announceTimer);
 
     if (isPreviewMode) {
       const chosen = allContainers.find((c) => c.cookieStoreId === cookieStoreId);
@@ -255,6 +259,7 @@ export async function createPickerController(deps = {}) {
       return;
     }
     settled = true;
+    clearTimeout(announceTimer);
 
     if (isPreviewMode) {
       searchInput.value = "";
@@ -273,17 +278,90 @@ export async function createPickerController(deps = {}) {
     }
   }
 
-  function applyFilter() {
+  async function openSettings() {
+    if (settled) {
+      return;
+    }
+
+    if (isPreviewMode) {
+      if (announcerEl) {
+        announcerEl.textContent = "Preview mode: settings unavailable";
+      }
+      return;
+    }
+
+    settled = true;
+    clearTimeout(announceTimer);
+
+    try {
+      await browserApi?.runtime?.sendMessage({
+        type: "OPEN_OPTIONS",
+        sessionId,
+      });
+    } catch {
+      try {
+        await browserApi?.runtime?.openOptionsPage?.();
+      } catch {
+        // Ignore fallback openOptionsPage failures
+      } finally {
+        win.close?.();
+      }
+    }
+  }
+
+  function applyFilter(event) {
+    if (settled) {
+      return;
+    }
     const query = searchInput.value;
+    const hasQuery = query.trim().length > 0;
     filteredContainers = filterContainers(allContainers, query);
     activeIndex = filteredContainers.length > 0 ? 0 : -1;
     renderList();
-    scheduleAnnouncement(filteredContainers.length, query.trim().length > 0);
+
+    const composing = isComposing || Boolean(event?.isComposing);
+    if (
+      autoOpenSingleMatch &&
+      hasQuery &&
+      !composing &&
+      filteredContainers.length === 1
+    ) {
+      clearTimeout(announceTimer);
+      pickContainer(filteredContainers[0].cookieStoreId);
+      return;
+    }
+
+    scheduleAnnouncement(filteredContainers.length, hasQuery);
+  }
+
+  function handleCompositionStart() {
+    isComposing = true;
+  }
+
+  function handleCompositionEnd() {
+    isComposing = false;
+    applyFilter();
   }
 
   function handleKeyDown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEscape();
+      return;
+    }
+
+    const isSettingsFocused = Boolean(
+      settingsBtn && doc.activeElement === settingsBtn
+    );
+    if (isSettingsFocused && (event.key === "Enter" || event.key === " ")) {
+      return;
+    }
+
     if (event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n")) {
       event.preventDefault();
+      if (isSettingsFocused) {
+        focusSearchInput();
+      }
       activeIndex = getNextIndex(activeIndex, 1, filteredContainers.length);
       updateActiveHighlight({ scroll: true });
       return;
@@ -291,6 +369,9 @@ export async function createPickerController(deps = {}) {
 
     if (event.key === "ArrowUp" || (event.ctrlKey && event.key.toLowerCase() === "p")) {
       event.preventDefault();
+      if (isSettingsFocused) {
+        focusSearchInput();
+      }
       activeIndex = getNextIndex(activeIndex, -1, filteredContainers.length);
       updateActiveHighlight({ scroll: true });
       return;
@@ -315,12 +396,6 @@ export async function createPickerController(deps = {}) {
       return;
     }
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelEscape();
-      return;
-    }
-
     if (
       event.key.length === 1 &&
       !event.ctrlKey &&
@@ -333,6 +408,9 @@ export async function createPickerController(deps = {}) {
   }
 
   searchInput.addEventListener("input", applyFilter);
+  searchInput.addEventListener("compositionstart", handleCompositionStart);
+  searchInput.addEventListener("compositionend", handleCompositionEnd);
+  settingsBtn?.addEventListener("click", openSettings);
   doc.addEventListener("keydown", handleKeyDown);
   win.addEventListener("focus", focusSearchInput);
 
@@ -341,12 +419,31 @@ export async function createPickerController(deps = {}) {
     win.requestAnimationFrame(focusSearchInput);
   }
 
+  function cleanup() {
+    clearTimeout(announceTimer);
+    searchInput.removeEventListener("input", applyFilter);
+    searchInput.removeEventListener("compositionstart", handleCompositionStart);
+    searchInput.removeEventListener("compositionend", handleCompositionEnd);
+    settingsBtn?.removeEventListener("click", openSettings);
+    doc.removeEventListener("keydown", handleKeyDown);
+    win.removeEventListener("focus", focusSearchInput);
+  }
+
   if (isPreviewMode) {
     allContainers = PREVIEW_CONTAINERS.slice();
     filteredContainers = allContainers.slice();
     activeIndex = 0;
+    autoOpenSingleMatch = params.get("autoOpen") === "1";
     renderList();
-    return { getState: () => ({ allContainers, filteredContainers, activeIndex }) };
+    return {
+      getState: () => ({
+        allContainers,
+        filteredContainers,
+        activeIndex,
+        autoOpenSingleMatch,
+      }),
+      destroy: cleanup,
+    };
   }
 
   try {
@@ -355,27 +452,37 @@ export async function createPickerController(deps = {}) {
       sessionId: requestedSessionId,
     });
     if (!state || !Array.isArray(state.containers)) {
+      cleanup();
       win.close?.();
       return null;
     }
     sessionId = state.sessionId || requestedSessionId;
     allContainers = state.containers;
-    filteredContainers = allContainers.slice();
-    activeIndex = filteredContainers.length > 0 ? 0 : -1;
-    renderList();
-    focusSearchInput();
+    autoOpenSingleMatch = Boolean(state.settings?.autoOpenSingleMatch);
+    if (searchInput.value.length > 0) {
+      applyFilter();
+    } else {
+      filteredContainers = allContainers.slice();
+      activeIndex = filteredContainers.length > 0 ? 0 : -1;
+      renderList();
+    }
+    if (!settled) {
+      focusSearchInput();
+    }
   } catch {
+    cleanup();
     win.close?.();
     return null;
   }
 
   return {
-    getState: () => ({ allContainers, filteredContainers, activeIndex }),
-    destroy() {
-      clearTimeout(announceTimer);
-      doc.removeEventListener("keydown", handleKeyDown);
-      win.removeEventListener("focus", focusSearchInput);
-    },
+    getState: () => ({
+      allContainers,
+      filteredContainers,
+      activeIndex,
+      autoOpenSingleMatch,
+    }),
+    destroy: cleanup,
   };
 }
 
