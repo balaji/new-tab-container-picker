@@ -26,7 +26,7 @@ function createEventEmitter() {
 
 function createMockBrowser(initial = {}) {
   let nextTabId = 100;
-  let nextWindowId = 200;
+  let nextSessionId = 1;
 
   const tabsMap = new Map();
   const windowsMap = new Map();
@@ -63,36 +63,28 @@ function createMockBrowser(initial = {}) {
   }
 
   const localStore = { ...(initial.localStorage ?? {}) };
-  const sessionStore = { ...(initial.sessionStorage ?? {}) };
-
-  const badgeState = {
-    text: "",
-    backgroundColor: null,
-    textColor: null,
-    title: "",
-  };
-
-  const createdTabsLog = [];
-  const createdWindowsLog = [];
-  const removedTabsLog = [];
-  const removedWindowsLog = [];
+  const grantedPermissions = new Set(
+    initial.permissions ?? ["tabs", "sessions"]
+  );
   const recentlyClosed = (initial.recentlyClosed ?? []).map((entry) =>
     structuredClone(entry)
   );
+
+  const createdTabsLog = [];
+  const removedTabsLog = [];
   const forgottenWindowsLog = [];
   const forgottenTabsLog = [];
-  let nextSessionId = 1;
-  let openOptionsCalls = 0;
+  const commandsUpdateLog = [];
+  let commandShortcut = initial.shortcut ?? "Ctrl+Shift+Y";
 
   const tabsOnCreated = createEventEmitter();
   const tabsOnUpdated = createEventEmitter();
   const tabsOnRemoved = createEventEmitter();
-  const windowsOnFocusChanged = createEventEmitter();
   const windowsOnRemoved = createEventEmitter();
   const sessionsOnChanged = createEventEmitter();
-  const actionOnClicked = createEventEmitter();
+  const permissionsOnAdded = createEventEmitter();
+  const permissionsOnRemoved = createEventEmitter();
   const storageOnChanged = createEventEmitter();
-  const runtimeOnMessage = createEventEmitter();
   const runtimeOnInstalled = createEventEmitter();
   const runtimeOnStartup = createEventEmitter();
 
@@ -116,6 +108,35 @@ function createMockBrowser(initial = {}) {
     },
   ];
 
+  const sessionsApi = {
+    onChanged: sessionsOnChanged,
+    async getRecentlyClosed() {
+      return recentlyClosed.map((entry) => structuredClone(entry));
+    },
+    async forgetClosedWindow(sessionId) {
+      const idx = recentlyClosed.findIndex(
+        (entry) => entry.window?.sessionId === sessionId
+      );
+      if (idx !== -1) {
+        recentlyClosed.splice(idx, 1);
+      }
+      forgottenWindowsLog.push(sessionId);
+      void sessionsOnChanged.emit();
+    },
+    async forgetClosedTab(windowId, sessionId) {
+      const idx = recentlyClosed.findIndex(
+        (entry) =>
+          entry.tab?.windowId === windowId &&
+          entry.tab?.sessionId === sessionId
+      );
+      if (idx !== -1) {
+        recentlyClosed.splice(idx, 1);
+      }
+      forgottenTabsLog.push({ windowId, sessionId });
+      void sessionsOnChanged.emit();
+    },
+  };
+
   const browser = {
     tabs: {
       onCreated: tabsOnCreated,
@@ -128,12 +149,13 @@ function createMockBrowser(initial = {}) {
       },
       async create(props) {
         const id = nextTabId++;
+        const windowId = props.windowId ?? 10;
         const existingInWin = [...tabsMap.values()].filter(
-          (t) => t.windowId === props.windowId
+          (t) => t.windowId === windowId
         );
         const tab = {
           id,
-          windowId: props.windowId ?? 10,
+          windowId,
           index: props.index ?? existingInWin.length,
           url: props.url ?? "about:newtab",
           cookieStoreId: props.cookieStoreId ?? "firefox-default",
@@ -147,22 +169,26 @@ function createMockBrowser(initial = {}) {
         await tabsOnCreated.emit({ ...tab });
         return { ...tab };
       },
-      async update(tabId, props) {
+      async remove(tabId) {
         const tab = tabsMap.get(tabId);
         if (!tab) throw new Error(`No tab ${tabId}`);
-        Object.assign(tab, props);
-        return { ...tab };
-      },
-      async remove(tabId) {
-        if (!tabsMap.has(tabId)) throw new Error(`No tab ${tabId}`);
         tabsMap.delete(tabId);
         removedTabsLog.push(tabId);
+        if (tab.url && tab.url !== "about:newtab" && tab.url !== "about:blank") {
+          recentlyClosed.unshift({
+            tab: {
+              ...tab,
+              sessionId: `tab-sess-${nextSessionId++}`,
+            },
+          });
+        }
         await tabsOnRemoved.emit(tabId);
+        if (browser.sessions) {
+          await sessionsOnChanged.emit();
+        }
       },
     },
     windows: {
-      WINDOW_ID_NONE: -1,
-      onFocusChanged: windowsOnFocusChanged,
       onRemoved: windowsOnRemoved,
       async get(windowId, opts = {}) {
         const win = windowsMap.get(windowId);
@@ -175,41 +201,6 @@ function createMockBrowser(initial = {}) {
         }
         return copy;
       },
-      async create(props) {
-        const id = nextWindowId++;
-        const win = {
-          id,
-          type: props.type ?? "normal",
-          focused: props.focused ?? true,
-          left: props.left ?? 0,
-          top: props.top ?? 0,
-          width: props.width ?? 360,
-          height: props.height ?? 300,
-        };
-        windowsMap.set(id, win);
-        createdWindowsLog.push({ props: { ...props }, win: { ...win } });
-
-        const popupTabId = nextTabId++;
-        const popupTab = {
-          id: popupTabId,
-          windowId: id,
-          index: 0,
-          url: props.url ?? "about:blank",
-          cookieStoreId: "firefox-default",
-          active: true,
-          incognito: false,
-          pinned: false,
-        };
-        tabsMap.set(popupTabId, popupTab);
-        await tabsOnCreated.emit({ ...popupTab });
-        return { ...win, tabs: [{ ...popupTab }] };
-      },
-      async update(windowId, props) {
-        const win = windowsMap.get(windowId);
-        if (!win) throw new Error(`No window ${windowId}`);
-        Object.assign(win, props);
-        return { ...win };
-      },
       async remove(windowId) {
         const win = windowsMap.get(windowId);
         if (!win) throw new Error(`No window ${windowId}`);
@@ -221,7 +212,6 @@ function createMockBrowser(initial = {}) {
           }
         }
         windowsMap.delete(windowId);
-        removedWindowsLog.push(windowId);
         recentlyClosed.unshift({
           window: {
             ...win,
@@ -230,7 +220,9 @@ function createMockBrowser(initial = {}) {
           },
         });
         await windowsOnRemoved.emit(windowId);
-        await sessionsOnChanged.emit();
+        if (browser.sessions) {
+          await sessionsOnChanged.emit();
+        }
       },
     },
     contextualIdentities: {
@@ -285,110 +277,61 @@ function createMockBrowser(initial = {}) {
           }
         },
       },
-      session: {
-        async get(key) {
-          if (typeof key === "string") {
-            return key in sessionStore ? { [key]: sessionStore[key] } : {};
-          }
-          return { ...sessionStore };
-        },
-        async set(obj) {
-          Object.assign(sessionStore, obj);
-        },
-        async remove(key) {
-          delete sessionStore[key];
-        },
+    },
+    permissions: {
+      onAdded: permissionsOnAdded,
+      onRemoved: permissionsOnRemoved,
+      async contains({ permissions = [] } = {}) {
+        return permissions.every((p) => grantedPermissions.has(p));
       },
     },
-    action: {
-      onClicked: actionOnClicked,
-      async setBadgeText({ text }) {
-        badgeState.text = text;
+    commands: {
+      async getAll() {
+        return [{ name: "_execute_action", shortcut: commandShortcut }];
       },
-      async setBadgeBackgroundColor({ color }) {
-        badgeState.backgroundColor = color;
-      },
-      async setBadgeTextColor({ color }) {
-        badgeState.textColor = color;
-      },
-      async setTitle({ title }) {
-        badgeState.title = title;
-      },
-    },
-    sessions: {
-      onChanged: sessionsOnChanged,
-      async getRecentlyClosed() {
-        return recentlyClosed.map((entry) => structuredClone(entry));
-      },
-      async forgetClosedWindow(sessionId) {
-        const idx = recentlyClosed.findIndex(
-          (entry) => entry.window?.sessionId === sessionId
-        );
-        if (idx !== -1) {
-          recentlyClosed.splice(idx, 1);
-        }
-        forgottenWindowsLog.push(sessionId);
-        void sessionsOnChanged.emit();
-      },
-      async forgetClosedTab(windowId, sessionId) {
-        const idx = recentlyClosed.findIndex(
-          (entry) =>
-            entry.tab?.windowId === windowId &&
-            entry.tab?.sessionId === sessionId
-        );
-        if (idx !== -1) {
-          recentlyClosed.splice(idx, 1);
-        }
-        forgottenTabsLog.push({ windowId, sessionId });
-        void sessionsOnChanged.emit();
+      async update(details) {
+        commandsUpdateLog.push(details);
+        commandShortcut = details.shortcut;
       },
     },
     runtime: {
-      onMessage: runtimeOnMessage,
       onInstalled: runtimeOnInstalled,
       onStartup: runtimeOnStartup,
       getURL(path) {
         return `moz-extension://test-uuid/${path}`;
       },
-      async openOptionsPage() {
-        openOptionsCalls += 1;
-      },
-      async sendMessage(msg) {
-        const results = await runtimeOnMessage.emit(msg);
-        return results[0];
-      },
     },
   };
+
+  if (!initial.omitSessions) {
+    browser.sessions = sessionsApi;
+  }
 
   return {
     browser,
     tabsMap,
     windowsMap,
     localStore,
-    sessionStore,
-    badgeState,
     createdTabsLog,
-    createdWindowsLog,
     removedTabsLog,
-    removedWindowsLog,
     recentlyClosed,
     forgottenWindowsLog,
     forgottenTabsLog,
-    getOpenOptionsCalls: () => openOptionsCalls,
+    commandsUpdateLog,
+    getCommandShortcut: () => commandShortcut,
     setContainersMode(mode) {
       containersMode = mode;
     },
-    async simulateClosedUserTab(url = "https://example.com", windowId = 10) {
-      const tabSession = {
-        tab: {
-          windowId,
-          sessionId: `tab-sess-${nextSessionId++}`,
-          url,
-        },
-      };
-      recentlyClosed.unshift(tabSession);
-      await sessionsOnChanged.emit();
-      return structuredClone(tabSession);
+    async grantPermissions(perms) {
+      for (const p of perms) grantedPermissions.add(p);
+      if (perms.includes("sessions")) {
+        browser.sessions = sessionsApi;
+      }
+      await permissionsOnAdded.emit({ permissions: perms });
+    },
+    async revokePermissions(perms) {
+      for (const p of perms) grantedPermissions.delete(p);
+      await permissionsOnRemoved.emit({ permissions: perms });
     },
     async simulateNewTab(overrides = {}) {
       const id = nextTabId++;
@@ -417,426 +360,236 @@ function createMockBrowser(initial = {}) {
       }
       await tabsOnUpdated.emit(tabId, changeInfo, tab ? { ...tab } : undefined);
     },
+    async simulateClosedUserTab(url = "https://example.com", windowId = 10) {
+      const tabSession = {
+        tab: {
+          windowId,
+          sessionId: `tab-sess-${nextSessionId++}`,
+          url,
+        },
+      };
+      recentlyClosed.unshift(tabSession);
+      if (browser.sessions) {
+        await sessionsOnChanged.emit();
+      }
+      return structuredClone(tabSession);
+    },
   };
 }
 
-test("1. about:newtab opens centered popup window with Default + Firefox containers", async () => {
+test("1. Default openOnNewTab=false leaves about:newtab untouched; openOnNewTab=true replaces about:newtab with in-tab picker at same index", async () => {
   const mock = createMockBrowser();
   const controller = createBackgroundController(mock.browser, {
     pendingTimeoutMs: 25,
-    blurGraceMs: 250,
   });
   await controller.ensureInitialized();
 
-  const newTab = await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 1);
+  assert.equal(controller.isNewTabModeEnabled(), false);
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
 
-  const popupProps = mock.createdWindowsLog[0].props;
-  assert.equal(popupProps.type, "popup");
-  assert.equal(popupProps.focused, true);
-  assert.equal(popupProps.width, 360);
-  assert.match(popupProps.url, /^moz-extension:\/\/test-uuid\/src\/picker\/picker\.html\?session=/);
+  await mock.browser.storage.local.set({ openOnNewTab: true });
+  assert.equal(controller.isNewTabModeEnabled(), true);
 
-  const state = await mock.browser.runtime.sendMessage({
-    type: "GET_PICKER_STATE",
+  const placeholder = await mock.simulateNewTab({ url: "about:newtab", index: 1 });
+  assert.equal(mock.createdTabsLog.length, 1);
+  assert.deepEqual(mock.createdTabsLog[0].props, {
+    windowId: 10,
+    index: 1,
+    url: "moz-extension://test-uuid/src/picker/picker.html?mode=tab",
+    active: true,
   });
-  assert.equal(state.containers.length, 3);
-  assert.equal(state.containers[0].name, "Default");
-  assert.equal(state.containers[0].colorCode, null);
-  assert.equal(state.containers[1].name, "Personal");
-  assert.equal(state.containers[1].colorCode, "#37adff");
-  assert.equal(state.containers[2].name, "Work");
-  assert.equal(state.containers[2].colorCode, "#ff9f00");
-  assert.equal(controller.getActiveSession().placeholderTabId, newTab.id);
+  assert.equal(mock.tabsMap.has(placeholder.id), false);
+  const pickerTabId = mock.createdTabsLog[0].tab.id;
+  assert.equal(mock.tabsMap.has(pickerTabId), true);
 
   controller.destroy();
 });
 
 test("2. about:blank transitions to about:newtab vs navigating to real URL", async () => {
-  const mock = createMockBrowser();
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+  });
   const controller = createBackgroundController(mock.browser, {
     pendingTimeoutMs: 40,
   });
   await controller.ensureInitialized();
 
-  // Case A: about:blank -> real URL cancels picker
   const realTab = await mock.simulateNewTab({ url: "about:blank" });
-  assert.equal(mock.createdWindowsLog.length, 0);
+  assert.equal(mock.createdTabsLog.length, 0);
   await mock.simulateTabUpdate(realTab.id, { url: "https://example.com" });
   await new Promise((r) => setTimeout(r, 60));
-  assert.equal(mock.createdWindowsLog.length, 0);
-
-  // Case B: about:blank -> about:newtab opens picker
-  const blankToNewTab = await mock.simulateNewTab({ url: "about:blank" });
-  assert.equal(mock.createdWindowsLog.length, 0);
-  await mock.simulateTabUpdate(blankToNewTab.id, { url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 1);
-
-  controller.destroy();
-});
-
-test("3. Picking Default closes popup, focuses parent window, and keeps placeholder tab", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const state = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  const res = await mock.browser.runtime.sendMessage({
-    type: "PICK_CONTAINER",
-    sessionId: state.sessionId,
-    cookieStoreId: "firefox-default",
-  });
-
-  assert.equal(res.ok, true);
-  assert.equal(mock.windowsMap.has(popupId), false);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
   assert.equal(mock.createdTabsLog.length, 0);
-  assert.equal(mock.windowsMap.get(10).focused, true);
-  assert.equal(controller.getActiveSession(), null);
 
-  controller.destroy();
-});
-
-test("4. Picking a named container opens native new tab at exact index, removes placeholder, and does not re-trigger", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab", index: 1 });
-  const state = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  const res = await mock.browser.runtime.sendMessage({
-    type: "PICK_CONTAINER",
-    sessionId: state.sessionId,
-    cookieStoreId: "firefox-container-2",
-  });
-
-  assert.equal(res.ok, true);
+  const blankToNewTab = await mock.simulateNewTab({ url: "about:blank" });
+  assert.equal(mock.createdTabsLog.length, 0);
+  await mock.simulateTabUpdate(blankToNewTab.id, { url: "about:newtab" });
   assert.equal(mock.createdTabsLog.length, 1);
-  assert.equal(mock.createdTabsLog[0].props.cookieStoreId, "firefox-container-2");
-  assert.equal(mock.createdTabsLog[0].props.index, 1);
-  assert.equal("url" in mock.createdTabsLog[0].props, false); // preserves Firefox native about:newtab
-  assert.equal(mock.tabsMap.has(placeholder.id), false);
-  assert.equal(mock.windowsMap.has(popupId), false);
-  // Must NOT re-open another popup
-  assert.equal(mock.createdWindowsLog.length, 1);
+  assert.equal(
+    mock.createdTabsLog[0].props.url,
+    "moz-extension://test-uuid/src/picker/picker.html?mode=tab"
+  );
 
   controller.destroy();
 });
 
-test("5. Pressing Escape closes popup and keeps placeholder tab open as Default", async () => {
-  const mock = createMockBrowser();
+test("3. Closing an in-tab picker tab purges it from sessions.recentlyClosed and keeps closed user tab at index 0", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+  });
   const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const state = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  const res = await mock.browser.runtime.sendMessage({
-    type: "CANCEL_ESCAPE",
-    sessionId: state.sessionId,
-  });
-
-  assert.equal(res.ok, true);
-  assert.equal(mock.windowsMap.has(popupId), false);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
-  assert.equal(mock.removedTabsLog.length, 0);
-  assert.equal(mock.windowsMap.get(10).focused, true);
-  assert.equal(mock.tabsMap.get(placeholder.id).active, true);
-  assert.equal(controller.getActiveSession(), null);
-
-  controller.destroy();
-});
-
-test("6. Clicking another Firefox window dismisses popup (keeps Default tab); Cmd+Tab (WINDOW_ID_NONE) and startup jitter keep popup open", async () => {
-  let fakeNow = 1000;
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser, {
-    blurGraceMs: 250,
-    now: () => fakeNow,
-  });
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  // Jitter inside grace period (100ms < 250ms) -> stays open
-  fakeNow = 1100;
-  await mock.browser.windows.onFocusChanged.emit(10);
-  assert.equal(mock.windowsMap.has(popupId), true);
-
-  // Switching to another app via Cmd+Tab (WINDOW_ID_NONE = -1) after grace -> stays open
-  fakeNow = 1300;
-  await mock.browser.windows.onFocusChanged.emit(-1);
-  assert.equal(mock.windowsMap.has(popupId), true);
-  assert.notEqual(controller.getActiveSession(), null);
-
-  // Focusing the Firefox window after grace period -> dismisses popup, keeps Default tab
-  fakeNow = 1400;
-  await mock.browser.windows.onFocusChanged.emit(10);
-  assert.equal(mock.windowsMap.has(popupId), false);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
-  assert.equal(controller.getActiveSession(), null);
-
-  controller.destroy();
-});
-
-test("7. Closing popup window externally clears session and keeps Default tab", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  await mock.browser.windows.remove(popupId);
-  assert.equal(controller.getActiveSession(), null);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
-
-  controller.destroy();
-});
-
-test("8. Rapid second Cmd+T dismisses previous popup and opens picker for newest tab", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const firstTab = await mock.simulateNewTab({ url: "about:newtab" });
-  const firstPopupId = controller.getActiveSession().popupWindowId;
-
-  const secondTab = await mock.simulateNewTab({ url: "about:newtab" });
-  const secondPopupId = controller.getActiveSession().popupWindowId;
-
-  assert.notEqual(secondPopupId, firstPopupId);
-  assert.equal(mock.windowsMap.has(firstPopupId), false);
-  assert.equal(mock.tabsMap.has(firstTab.id), true);
-  assert.equal(controller.getActiveSession().placeholderTabId, secondTab.id);
-
-  controller.destroy();
-});
-
-test("9. Containers disabled or empty never opens popup", async () => {
-  const mock = createMockBrowser({ containersMode: "disabled-throw" });
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 0);
-
-  mock.setContainersMode("empty");
-  await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 0);
-
-  controller.destroy();
-});
-
-test("10. Toolbar icon toggles paused (OFF badge) and suppresses picker until resumed", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  assert.equal(mock.badgeState.text, "");
-
-  // Click toolbar icon -> pause
-  await mock.browser.action.onClicked.emit();
-  assert.equal(controller.isEnabled(), false);
-  assert.equal(mock.badgeState.text, "OFF");
-  assert.equal(mock.localStore.enabled, false);
-
-  await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 0);
-
-  // Click toolbar icon -> resume
-  await mock.browser.action.onClicked.emit();
-  assert.equal(controller.isEnabled(), true);
-  assert.equal(mock.badgeState.text, "");
-  assert.equal(mock.localStore.enabled, true);
-
-  await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 1);
-
-  controller.destroy();
-});
-
-test("11. GET_PICKER_STATE defaults autoOpenSingleMatch to false and reflects stored true", async () => {
-  const mockDefault = createMockBrowser();
-  const controllerDefault = createBackgroundController(mockDefault.browser);
-  await controllerDefault.ensureInitialized();
-
-  await mockDefault.simulateNewTab({ url: "about:newtab" });
-  const defaultState = await mockDefault.browser.runtime.sendMessage({
-    type: "GET_PICKER_STATE",
-  });
-  assert.deepEqual(defaultState.settings, { autoOpenSingleMatch: false });
-  assert.deepEqual(controllerDefault.getSettings(), {
-    enabled: true,
-    autoOpenSingleMatch: false,
-  });
-  controllerDefault.destroy();
-
-  const mockEnabled = createMockBrowser({
-    localStorage: { autoOpenSingleMatch: true },
-  });
-  const controllerEnabled = createBackgroundController(mockEnabled.browser);
-  await controllerEnabled.ensureInitialized();
-
-  await mockEnabled.simulateNewTab({ url: "about:newtab" });
-  const enabledState = await mockEnabled.browser.runtime.sendMessage({
-    type: "GET_PICKER_STATE",
-  });
-  assert.deepEqual(enabledState.settings, { autoOpenSingleMatch: true });
-  assert.deepEqual(controllerEnabled.getSettings(), {
-    enabled: true,
-    autoOpenSingleMatch: true,
-  });
-  controllerEnabled.destroy();
-});
-
-test("12. Changing autoOpenSingleMatch in storage.local updates controller and GET_PICKER_STATE", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  await mock.browser.storage.local.set({ autoOpenSingleMatch: true });
-  assert.equal(controller.getSettings().autoOpenSingleMatch, true);
-
-  await mock.simulateNewTab({ url: "about:newtab" });
-  const state = await mock.browser.runtime.sendMessage({
-    type: "GET_PICKER_STATE",
-  });
-  assert.equal(state.settings.autoOpenSingleMatch, true);
-
-  controller.destroy();
-});
-
-test("13. Changing enabled to false via storage.onChanged updates badge, dismisses popup, and suppresses new tabs", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  await mock.browser.storage.local.set({ enabled: false });
-  assert.equal(controller.isEnabled(), false);
-  assert.equal(mock.badgeState.text, "OFF");
-  assert.equal(mock.windowsMap.has(popupId), false);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
-  assert.equal(controller.getActiveSession(), null);
-
-  await mock.simulateNewTab({ url: "about:newtab" });
-  assert.equal(mock.createdWindowsLog.length, 1);
-
-  controller.destroy();
-});
-
-test("14. OPEN_OPTIONS closes popup, focuses parent window, keeps placeholder tab, clears session, and opens options page", async () => {
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser);
-  await controller.ensureInitialized();
-
-  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
-  const state = await mock.browser.runtime.sendMessage({
-    type: "GET_PICKER_STATE",
-  });
-  const popupId = controller.getActiveSession().popupWindowId;
-
-  await mock.browser.windows.update(10, { focused: false });
-
-  const res = await mock.browser.runtime.sendMessage({
-    type: "OPEN_OPTIONS",
-    sessionId: state.sessionId,
-  });
-
-  assert.equal(res.ok, true);
-  assert.equal(mock.getOpenOptionsCalls(), 1);
-  assert.equal(mock.windowsMap.has(popupId), false);
-  assert.equal(mock.windowsMap.get(10).focused, true);
-  assert.equal(mock.tabsMap.has(placeholder.id), true);
-  assert.equal(controller.getActiveSession(), null);
-
-  controller.destroy();
-});
-
-test("15. All popup close paths purge popup window from sessions.recentlyClosed and keep user tab at index 0", async () => {
-  let fakeNow = 1000;
-  const mock = createMockBrowser();
-  const controller = createBackgroundController(mock.browser, {
-    blurGraceMs: 250,
-    now: () => fakeNow,
-  });
   await controller.ensureInitialized();
 
   await mock.simulateClosedUserTab("https://example.com");
   assert.equal(mock.recentlyClosed.length, 1);
   assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
 
-  // 1) Picking Default
   await mock.simulateNewTab({ url: "about:newtab" });
-  const s1 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  await mock.browser.runtime.sendMessage({
-    type: "PICK_CONTAINER",
-    sessionId: s1.sessionId,
-    cookieStoreId: "firefox-default",
-  });
+  const pickerTabId = mock.createdTabsLog[0].tab.id;
+
+  await mock.browser.tabs.remove(pickerTabId);
+
+  assert.equal(mock.forgottenTabsLog.length, 1);
   assert.equal(mock.recentlyClosed.length, 1);
   assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
-
-  // 2) Picking a named container
-  await mock.simulateNewTab({ url: "about:newtab" });
-  const s2 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  await mock.browser.runtime.sendMessage({
-    type: "PICK_CONTAINER",
-    sessionId: s2.sessionId,
-    cookieStoreId: "firefox-container-2",
-  });
-  assert.equal(mock.recentlyClosed.length, 1);
-  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
-
-  // 3) Pressing Escape
-  await mock.simulateNewTab({ url: "about:newtab" });
-  const s3 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
-  await mock.browser.runtime.sendMessage({
-    type: "CANCEL_ESCAPE",
-    sessionId: s3.sessionId,
-  });
-  assert.equal(mock.recentlyClosed.length, 1);
-  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
-
-  // 4) Blur-dismiss by focusing parent window past grace period
-  await mock.simulateNewTab({ url: "about:newtab" });
-  fakeNow += 300;
-  await mock.browser.windows.onFocusChanged.emit(10);
-  assert.equal(mock.recentlyClosed.length, 1);
-  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
-
-  // 5) External popup window close
-  await mock.simulateNewTab({ url: "about:newtab" });
-  const popupId = controller.getActiveSession().popupWindowId;
-  await mock.browser.windows.remove(popupId);
-  assert.equal(mock.recentlyClosed.length, 1);
-  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
-
-  assert.equal(mock.forgottenWindowsLog.length, 5);
-  assert.equal(new Set(mock.forgottenWindowsLog).size, 5);
 
   controller.destroy();
 });
 
-test("16. Initialization sweeps pre-existing closed picker popups without touching user sessions or deadlocking", async () => {
+test("4. Tabs created with openerTabId (Default/Escape replacement) are ignored and never re-trigger picker", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const pickerTabId = mock.createdTabsLog[0].tab.id;
+
+  const defaultTab = await mock.browser.tabs.create({
+    windowId: 10,
+    index: 1,
+    active: true,
+    openerTabId: pickerTabId,
+  });
+  await mock.browser.tabs.remove(pickerTabId);
+
+  assert.equal(mock.createdTabsLog.length, 2);
+  assert.equal(mock.tabsMap.has(defaultTab.id), true);
+  assert.equal(mock.tabsMap.has(pickerTabId), false);
+
+  controller.destroy();
+});
+
+test("5. Containers disabled/empty, single-tab windows, incognito, pinned, and container tabs never trigger picker", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+    containersMode: "disabled-throw",
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  mock.setContainersMode("empty");
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  mock.setContainersMode("enabled");
+  await mock.simulateNewTab({ url: "about:newtab", incognito: true });
+  await mock.simulateNewTab({ url: "about:newtab", pinned: true });
+  await mock.simulateNewTab({
+    url: "about:newtab",
+    cookieStoreId: "firefox-container-1",
+  });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  mock.windowsMap.set(20, { id: 20, type: "normal", focused: true });
+  await mock.simulateNewTab({ windowId: 20, url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  controller.destroy();
+});
+
+test("6. Turning openOnNewTab off stops new-tab interception immediately", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  assert.equal(controller.isNewTabModeEnabled(), true);
+  await mock.browser.storage.local.set({ openOnNewTab: false });
+  assert.equal(controller.isNewTabModeEnabled(), false);
+
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  controller.destroy();
+});
+
+test("7. Optional permissions lifecycle handles startup without tabs without deadlocking, dynamic sessions grant, and tabs revocation without touching shortcut", async () => {
+  const startupMock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+    shortcut: "Ctrl+Shift+U",
+    permissions: [],
+    omitSessions: true,
+  });
+  const startupCtrl = createBackgroundController(startupMock.browser);
+  await startupCtrl.ensureInitialized();
+
+  assert.equal(startupCtrl.isNewTabModeEnabled(), false);
+  assert.equal(startupMock.localStore.openOnNewTab, false);
+  assert.equal(startupMock.commandsUpdateLog.length, 0);
+  assert.equal(startupMock.getCommandShortcut(), "Ctrl+Shift+U");
+
+  startupMock.recentlyClosed.unshift({
+    tab: {
+      windowId: 10,
+      sessionId: "stale-picker-tab",
+      url: "moz-extension://test-uuid/src/picker/picker.html?mode=tab",
+    },
+  });
+  await startupMock.grantPermissions(["tabs", "sessions"]);
+  assert.deepEqual(startupMock.forgottenTabsLog, [
+    { windowId: 10, sessionId: "stale-picker-tab" },
+  ]);
+  startupCtrl.destroy();
+
+  const revokeMock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+    shortcut: "Ctrl+Shift+U",
+    permissions: ["tabs", "sessions"],
+  });
+  const revokeCtrl = createBackgroundController(revokeMock.browser);
+  await revokeCtrl.ensureInitialized();
+
+  await revokeMock.revokePermissions(["tabs"]);
+  assert.equal(revokeCtrl.isNewTabModeEnabled(), false);
+  assert.equal(revokeMock.localStore.openOnNewTab, false);
+  assert.equal(revokeMock.commandsUpdateLog.length, 0);
+  assert.equal(revokeMock.getCommandShortcut(), "Ctrl+Shift+U");
+
+  revokeCtrl.destroy();
+});
+
+test("8. Initialization sweeps pre-existing closed picker tabs and windows without touching user sessions or deadlocking", async () => {
   const mock = createMockBrowser({
     recentlyClosed: [
+      {
+        tab: {
+          windowId: 10,
+          sessionId: "stale-picker-tab",
+          url: "moz-extension://test-uuid/src/picker/picker.html?mode=tab",
+        },
+      },
       {
         window: {
           sessionId: "stale-picker-win",
           tabs: [
             {
-              url: "moz-extension://test-uuid/src/picker/picker.html?session=old",
+              url: "moz-extension://test-uuid/src/picker/picker.html?session=legacy",
             },
           ],
         },
@@ -860,26 +613,25 @@ test("16. Initialization sweeps pre-existing closed picker popups without touchi
   const controller = createBackgroundController(mock.browser);
   await controller.ensureInitialized();
 
+  assert.deepEqual(mock.forgottenTabsLog, [
+    { windowId: 10, sessionId: "stale-picker-tab" },
+  ]);
   assert.deepEqual(mock.forgottenWindowsLog, ["stale-picker-win"]);
   assert.equal(mock.recentlyClosed.length, 2);
   assert.equal(mock.recentlyClosed[0].window.sessionId, "user-win");
   assert.equal(mock.recentlyClosed[1].tab.sessionId, "user-tab");
 
-  // Late sessions.onChanged event for an external picker closure also sweeps cleanly
   mock.recentlyClosed.unshift({
-    window: {
-      sessionId: "late-picker-win",
-      tabs: [
-        {
-          url: "moz-extension://test-uuid/src/picker/picker.html?session=late",
-        },
-      ],
+    tab: {
+      windowId: 10,
+      sessionId: "late-picker-tab",
+      url: "moz-extension://test-uuid/src/picker/picker.html?mode=tab",
     },
   });
   await mock.browser.sessions.onChanged.emit();
-  assert.deepEqual(mock.forgottenWindowsLog, [
-    "stale-picker-win",
-    "late-picker-win",
+  assert.deepEqual(mock.forgottenTabsLog, [
+    { windowId: 10, sessionId: "stale-picker-tab" },
+    { windowId: 10, sessionId: "late-picker-tab" },
   ]);
   assert.equal(mock.recentlyClosed.length, 2);
 

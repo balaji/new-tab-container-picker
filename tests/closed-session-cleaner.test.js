@@ -202,7 +202,6 @@ test("purge coalesces synchronous re-entrant calls triggered inside forgetClosed
         forgottenWindows.push(sessionId);
         const idx = recent.findIndex((e) => e.window?.sessionId === sessionId);
         if (idx !== -1) recent.splice(idx, 1);
-        // Simulate synchronous sessions.onChanged firing cleaner.purge()
         reentrantPromise = cleaner.purge();
       },
     },
@@ -222,7 +221,6 @@ test("purge catches a second closed picker window arriving mid-purge on the foll
   const forgottenWindows = [];
   let releaseFirstForget;
   const firstForgetStarted = new Promise((resolve) => {
-    // Resolved when w-1 forget begins
     releaseFirstForget = resolve;
   });
   let continueFirstForget;
@@ -251,7 +249,6 @@ test("purge catches a second closed picker window arriving mid-purge on the foll
   const p1 = cleaner.purge();
   await firstForgetStarted;
 
-  // Second popup closes while w-1 forget is still in flight
   recent.unshift({ window: { sessionId: "w-2", tabs: [{ url: PICKER_URL }] } });
   const p2 = cleaner.purge();
   continueFirstForget();
@@ -292,10 +289,8 @@ test("purge isolates failing entries, skips retrying failed IDs in-run, and resp
   const count = await resilientCleaner.purge();
   assert.equal(count, 1);
   assert.equal(await rerunRef, 1);
-  // w-fail is not retried on pass 2 within the same run
   assert.deepEqual(attempts, ["w-fail", "w-ok"]);
 
-  // maxPasses bounds runaway re-triggers, and subsequent purge runs cleanly
   assert.equal(DEFAULT_MAX_PASSES, 5);
   let passCount = 0;
   let seq = 0;

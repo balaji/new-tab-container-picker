@@ -53,7 +53,7 @@ test("getAvailableContainers handles legacy false return and empty identity list
   });
 });
 
-test("getAvailableContainers prepends transparent Default before Firefox containers", async () => {
+test("getAvailableContainers appends transparent Default after Firefox containers", async () => {
   const api = {
     async query(filter) {
       assert.deepEqual(filter, {});
@@ -83,16 +83,6 @@ test("getAvailableContainers prepends transparent Default before Firefox contain
   assert.equal(result.containers.length, 3);
 
   assert.deepEqual(result.containers[0], {
-    cookieStoreId: DEFAULT_COOKIE_STORE_ID,
-    name: "Default",
-    color: "transparent",
-    colorCode: null,
-    icon: null,
-    iconUrl: null,
-    isDefault: true,
-  });
-
-  assert.deepEqual(result.containers[1], {
     cookieStoreId: "firefox-container-1",
     name: "Personal",
     color: "blue",
@@ -102,6 +92,16 @@ test("getAvailableContainers prepends transparent Default before Firefox contain
     isDefault: false,
   });
 
-  assert.equal(result.containers[2].name, "Work");
-  assert.equal(result.containers[2].colorCode, "#ff9f00");
+  assert.equal(result.containers[1].name, "Work");
+  assert.equal(result.containers[1].colorCode, "#ff9f00");
+
+  assert.deepEqual(result.containers[2], {
+    cookieStoreId: DEFAULT_COOKIE_STORE_ID,
+    name: "Default",
+    color: "transparent",
+    colorCode: null,
+    icon: null,
+    iconUrl: null,
+    isDefault: true,
+  });
 });

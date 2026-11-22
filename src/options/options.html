@@ -10,19 +10,55 @@
 <body>
   <main class="options-page">
     <section class="settings-list" aria-label="Picker settings">
-      <label class="setting-row" for="setting-enabled">
+      <div class="setting-row setting-row--shortcut">
+        <div class="setting-copy">
+          <span class="setting-title">Keyboard shortcut</span>
+          <span id="setting-shortcut-desc" class="setting-description">
+            Shortcut to open the container picker popup. Click the field and press a key combination, or manage it in Firefox’s Manage Extension Shortcuts. Clicking the toolbar icon also opens the popup.
+          </span>
+        </div>
+        <div class="shortcut-controls">
+          <input
+            id="setting-shortcut"
+            class="shortcut-input"
+            type="text"
+            readonly
+            aria-label="Keyboard shortcut"
+            aria-describedby="setting-shortcut-desc"
+            placeholder="Press shortcut…"
+          >
+          <button
+            id="shortcut-reset"
+            class="shortcut-button"
+            type="button"
+            title="Reset to default shortcut"
+          >
+            Reset
+          </button>
+          <button
+            id="shortcut-clear"
+            class="shortcut-button"
+            type="button"
+            title="Clear shortcut"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <label class="setting-row" for="setting-open-on-new-tab">
         <span class="setting-copy">
-          <span class="setting-title">Enable container picker on new tabs</span>
-          <span id="setting-enabled-desc" class="setting-description">
-            Show the container picker popup whenever you open a new tab. You can also pause or resume from the toolbar button.
+          <span class="setting-title">Open picker on new tabs (Cmd+T / Ctrl+T)</span>
+          <span id="setting-open-on-new-tab-desc" class="setting-description">
+            Open the container picker directly inside new tabs. Requests optional tab &amp; recently closed session permissions.
           </span>
         </span>
         <span class="toggle-control">
           <input
-            id="setting-enabled"
+            id="setting-open-on-new-tab"
             class="toggle-input"
             type="checkbox"
-            aria-describedby="setting-enabled-desc"
+            aria-describedby="setting-open-on-new-tab-desc"
           >
           <span class="toggle-track" aria-hidden="true"></span>
         </span>

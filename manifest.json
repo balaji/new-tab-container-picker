@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "New Tab Container Picker",
   "version": "1.0.0",
-  "description": "Choose a Firefox Multi-Account Container via a quick searchable popup whenever you open a new tab.",
+  "description": "Choose a Firefox Multi-Account Container via a quick searchable popup — triggered by keyboard shortcut, toolbar button, or optionally on every new tab.",
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
@@ -17,10 +17,12 @@
     }
   },
   "permissions": [
-    "tabs",
     "cookies",
     "contextualIdentities",
-    "storage",
+    "storage"
+  ],
+  "optional_permissions": [
+    "tabs",
     "sessions"
   ],
   "background": {
@@ -28,9 +30,18 @@
     "type": "module"
   },
   "action": {
-    "default_title": "New Tab Container Picker (Enabled — click to pause)",
+    "default_title": "New Tab Container Picker",
+    "default_popup": "src/picker/picker.html",
     "default_icon": {
       "32": "icons/icon.svg"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Open the container picker popup"
     }
   },
   "options_ui": {

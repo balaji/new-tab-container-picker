@@ -4,8 +4,17 @@ import { createKeyboardHandler } from "./keyboard-handler.js";
 import { createListRenderer } from "./list-renderer.js";
 import { createPickerClient } from "./picker-client.js";
 
+const FOCUS_FALLBACK_DELAY_MS = 50;
+const DEFAULT_EMPTY_STATE_TEXT = "No matching containers";
+
+export const UNAVAILABLE_MESSAGES = Object.freeze({
+  "private-window": "Container tabs aren\u2019t available in Private Windows.",
+  "containers-disabled":
+    "Container Tabs are disabled or no containers exist. Enable Container Tabs in Firefox Settings (General \u2192 Tabs).",
+});
+
 /**
- * Initialize and control the floating container picker popup UI.
+ * Initialize and control the container picker toolbar popup UI.
  * @param {{ browserApi?: object, doc?: Document, win?: Window }} [deps]
  */
 export async function createPickerController(deps = {}) {
@@ -23,12 +32,22 @@ export async function createPickerController(deps = {}) {
   let filteredContainers = [];
   let activeIndex = 0;
   let autoOpenSingleMatch = false;
+  let unavailableReason = null;
   let isComposing = false;
+  let focusTimerId = null;
+  let destroyed = false;
 
   const announcer = createStatusAnnouncer(announcerEl);
 
   function focusSearchInput() {
-    if (searchInput && typeof searchInput.focus === "function") {
+    if (
+      !destroyed &&
+      !unavailableReason &&
+      !client.isSettled() &&
+      searchInput &&
+      !searchInput.disabled &&
+      typeof searchInput.focus === "function"
+    ) {
       searchInput.focus();
     }
   }
@@ -42,6 +61,10 @@ export async function createPickerController(deps = {}) {
       applyFilter();
     },
   });
+
+  if (client.isInTabMode) {
+    doc.documentElement?.setAttribute?.("data-mode", "tab");
+  }
 
   function pickContainer(cookieStoreId) {
     const chosen = allContainers.find((c) => c.cookieStoreId === cookieStoreId);
@@ -63,7 +86,7 @@ export async function createPickerController(deps = {}) {
   });
 
   function applyFilter(event) {
-    if (client.isSettled()) {
+    if (client.isSettled() || unavailableReason) {
       return;
     }
     const query = searchInput.value;
@@ -130,7 +153,28 @@ export async function createPickerController(deps = {}) {
     win.requestAnimationFrame(focusSearchInput);
   }
 
+  const scheduleTimeout =
+    typeof win.setTimeout === "function"
+      ? win.setTimeout.bind(win)
+      : setTimeout;
+  const cancelTimeout =
+    typeof win.clearTimeout === "function"
+      ? win.clearTimeout.bind(win)
+      : clearTimeout;
+
+  focusTimerId = scheduleTimeout(() => {
+    focusTimerId = null;
+    if (doc.activeElement !== settingsBtn) {
+      focusSearchInput();
+    }
+  }, FOCUS_FALLBACK_DELAY_MS);
+
   function cleanup() {
+    destroyed = true;
+    if (focusTimerId !== null) {
+      cancelTimeout(focusTimerId);
+      focusTimerId = null;
+    }
     announcer.clear();
     searchInput.removeEventListener("input", applyFilter);
     searchInput.removeEventListener("compositionstart", handleCompositionStart);
@@ -147,19 +191,50 @@ export async function createPickerController(deps = {}) {
     return null;
   }
 
-  allContainers = loaded.containers;
-  autoOpenSingleMatch = loaded.autoOpenSingleMatch;
+  if (loaded.unavailableReason) {
+    unavailableReason = loaded.unavailableReason;
+    allContainers = [];
+    filteredContainers = [];
+    activeIndex = -1;
+    autoOpenSingleMatch = false;
 
-  if (!loaded.isPreview && searchInput.value.length > 0) {
-    applyFilter();
+    if (searchInput) {
+      searchInput.disabled = true;
+      searchInput.setAttribute?.("aria-disabled", "true");
+    }
+    listRenderer.render([], -1);
+
+    const message =
+      UNAVAILABLE_MESSAGES[unavailableReason] ?? DEFAULT_EMPTY_STATE_TEXT;
+    if (emptyStateEl) {
+      emptyStateEl.textContent = message;
+      emptyStateEl.hidden = false;
+    }
+    announcer.announceImmediate(message);
   } else {
-    filteredContainers = allContainers.slice();
-    activeIndex = filteredContainers.length > 0 ? 0 : -1;
-    listRenderer.render(filteredContainers, activeIndex);
-  }
+    unavailableReason = null;
+    if (searchInput) {
+      searchInput.disabled = false;
+      searchInput.removeAttribute?.("aria-disabled");
+    }
+    if (emptyStateEl) {
+      emptyStateEl.textContent = DEFAULT_EMPTY_STATE_TEXT;
+    }
 
-  if (!loaded.isPreview && !client.isSettled()) {
-    focusSearchInput();
+    allContainers = loaded.containers;
+    autoOpenSingleMatch = loaded.autoOpenSingleMatch;
+
+    if (!loaded.isPreview && searchInput.value.length > 0) {
+      applyFilter();
+    } else {
+      filteredContainers = allContainers.slice();
+      activeIndex = filteredContainers.length > 0 ? 0 : -1;
+      listRenderer.render(filteredContainers, activeIndex);
+    }
+
+    if (!loaded.isPreview && !client.isSettled()) {
+      focusSearchInput();
+    }
   }
 
   return {
@@ -168,6 +243,7 @@ export async function createPickerController(deps = {}) {
       filteredContainers,
       activeIndex,
       autoOpenSingleMatch,
+      unavailableReason,
     }),
     destroy: cleanup,
   };

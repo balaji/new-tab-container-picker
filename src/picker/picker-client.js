@@ -1,7 +1,13 @@
+import {
+  DEFAULT_COOKIE_STORE_ID,
+  getAvailableContainers,
+} from "../lib/containers.js";
+import { loadSettings } from "../lib/settings.js";
 import { PREVIEW_CONTAINERS } from "./preview-data.js";
 
 /**
- * Manage picker session state loading, settled guard, and background runtime messaging.
+ * Manage picker state loading, settled guard, and tab creation for both
+ * native toolbar popups and in-tab (?mode=tab) new-tab replacement.
  * @param {{
  *   browserApi?: object,
  *   win: Window,
@@ -16,49 +22,122 @@ export function createPickerClient({
   onPreviewReset,
 }) {
   const params = new URLSearchParams(win.location?.search ?? "");
-  const requestedSessionId = params.get("session") ?? "";
+  const isInTabMode = params.get("mode") === "tab";
   const isPreviewMode =
-    !browserApi?.runtime?.sendMessage && params.get("preview") === "1";
+    !browserApi?.contextualIdentities && params.get("preview") === "1";
 
-  let sessionId = requestedSessionId;
   let settled = false;
 
+  async function closeInTabOrWindow(existingTab) {
+    if (isInTabMode) {
+      let targetTab = existingTab;
+      if (!targetTab) {
+        try {
+          targetTab = await browserApi?.tabs?.getCurrent?.();
+        } catch {
+          targetTab = null;
+        }
+      }
+      if (
+        typeof targetTab?.id === "number" &&
+        typeof browserApi?.tabs?.remove === "function"
+      ) {
+        try {
+          await browserApi.tabs.remove(targetTab.id);
+          return;
+        } catch {
+          // Fall back to win.close if tab removal fails
+        }
+      }
+    }
+    win.close?.();
+  }
+
+  async function replaceCurrentPickerTab(createTabProps) {
+    let currentTab = null;
+    try {
+      currentTab = await browserApi?.tabs?.getCurrent?.();
+    } catch {
+      // Fallback to creating tab without current index/id
+    }
+
+    const props = { ...createTabProps, active: true };
+    if (currentTab && typeof currentTab.windowId === "number") {
+      props.windowId = currentTab.windowId;
+    }
+    if (currentTab && typeof currentTab.index === "number") {
+      props.index = currentTab.index;
+    }
+    if (!props.cookieStoreId && typeof currentTab?.id === "number") {
+      props.openerTabId = currentTab.id;
+    }
+
+    try {
+      await browserApi?.tabs?.create?.(props);
+    } catch {
+      // Proceed to close current picker tab
+    } finally {
+      await closeInTabOrWindow(currentTab);
+    }
+  }
+
   /**
-   * Load initial container state from preview fixtures or the background controller.
-   * @returns {Promise<{ sessionId: string, containers: Array<object>, autoOpenSingleMatch: boolean, isPreview: boolean } | null>}
+   * Load containers, settings, and availability state directly from Firefox APIs or preview fixtures.
+   * @returns {Promise<{
+   *   containers: Array<object>,
+   *   autoOpenSingleMatch: boolean,
+   *   unavailableReason: "private-window" | "containers-disabled" | null,
+   *   isPreview: boolean,
+   * }>}
    */
   async function loadState() {
     if (isPreviewMode) {
       return {
-        sessionId,
         containers: PREVIEW_CONTAINERS.slice(),
         autoOpenSingleMatch: params.get("autoOpen") === "1",
+        unavailableReason: null,
         isPreview: true,
       };
     }
 
     try {
-      const state = await browserApi?.runtime?.sendMessage({
-        type: "GET_PICKER_STATE",
-        sessionId: requestedSessionId,
-      });
-      if (!state || !Array.isArray(state.containers)) {
-        return null;
+      const currentWin = await browserApi?.windows?.getCurrent?.();
+      if (currentWin?.incognito === true) {
+        return {
+          containers: [],
+          autoOpenSingleMatch: false,
+          unavailableReason: "private-window",
+          isPreview: false,
+        };
       }
-      sessionId = state.sessionId || requestedSessionId;
+    } catch {
+      // Ignore windows.getCurrent failures and continue loading containers
+    }
+
+    const [{ enabled, containers }, settings] = await Promise.all([
+      getAvailableContainers(browserApi?.contextualIdentities),
+      loadSettings(browserApi?.storage?.local),
+    ]);
+
+    if (!enabled) {
       return {
-        sessionId,
-        containers: state.containers,
-        autoOpenSingleMatch: Boolean(state.settings?.autoOpenSingleMatch),
+        containers: [],
+        autoOpenSingleMatch: Boolean(settings.autoOpenSingleMatch),
+        unavailableReason: "containers-disabled",
         isPreview: false,
       };
-    } catch {
-      return null;
     }
+
+    return {
+      containers,
+      autoOpenSingleMatch: Boolean(settings.autoOpenSingleMatch),
+      unavailableReason: null,
+      isPreview: false,
+    };
   }
 
   /**
-   * Submit a container selection to the background controller (or announce in preview mode).
+   * Open a new tab in the selected container (or Default).
    * @param {string} cookieStoreId
    * @param {string} [containerName]
    */
@@ -77,19 +156,27 @@ export function createPickerClient({
       return;
     }
 
+    const createProps =
+      cookieStoreId === DEFAULT_COOKIE_STORE_ID
+        ? {}
+        : { cookieStoreId };
+
+    if (isInTabMode) {
+      await replaceCurrentPickerTab(createProps);
+      return;
+    }
+
     try {
-      await browserApi?.runtime?.sendMessage({
-        type: "PICK_CONTAINER",
-        sessionId,
-        cookieStoreId,
-      });
+      await browserApi?.tabs?.create?.({ ...createProps, active: true });
     } catch {
+      // Close popup cleanly even if tab creation fails
+    } finally {
       win.close?.();
     }
   }
 
   /**
-   * Cancel the picker session on Escape (or reset search in preview mode).
+   * Close the popup on Escape, or replace an in-tab picker with a native Default new tab.
    */
   async function cancelEscape() {
     if (settled) {
@@ -104,18 +191,16 @@ export function createPickerClient({
       return;
     }
 
-    try {
-      await browserApi?.runtime?.sendMessage({
-        type: "CANCEL_ESCAPE",
-        sessionId,
-      });
-    } catch {
-      win.close?.();
+    if (isInTabMode) {
+      await replaceCurrentPickerTab({});
+      return;
     }
+
+    win.close?.();
   }
 
   /**
-   * Open extension preferences and dismiss the popup (or announce unavailable in preview mode).
+   * Open extension preferences and dismiss the picker (or announce unavailable in preview mode).
    */
   async function openSettings() {
     if (settled) {
@@ -131,22 +216,16 @@ export function createPickerClient({
     announcer.clear();
 
     try {
-      await browserApi?.runtime?.sendMessage({
-        type: "OPEN_OPTIONS",
-        sessionId,
-      });
+      await browserApi?.runtime?.openOptionsPage?.();
     } catch {
-      try {
-        await browserApi?.runtime?.openOptionsPage?.();
-      } catch {
-        // Ignore fallback openOptionsPage failures
-      } finally {
-        win.close?.();
-      }
+      // Ignore openOptionsPage failures
+    } finally {
+      await closeInTabOrWindow(null);
     }
   }
 
   return {
+    isInTabMode,
     isPreviewMode,
     isSettled: () => settled,
     loadState,

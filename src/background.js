@@ -1,66 +1,169 @@
+import { getPickerUrlPrefix } from "./background/browser-actions.js";
 import { createClosedSessionCleaner } from "./background/closed-session-cleaner.js";
-import { createMessageHandler } from "./background/message-handler.js";
-import { createSessionManager } from "./background/session-manager.js";
 import { createSettingsState } from "./background/settings-state.js";
 import { createTabWatcher } from "./background/tab-watcher.js";
+import { getAvailableContainers } from "./lib/containers.js";
+import { STORAGE_KEY_OPEN_ON_NEW_TAB, saveSettings } from "./lib/settings.js";
+import {
+  classifyTabUrl,
+  shouldTriggerForWindow,
+} from "./lib/tab-detection.js";
 
 /**
- * Create and wire the background controller against a WebExtension browser API object.
- * Exported for deterministic integration testing; auto-instantiated in Firefox runtime.
+ * Create and wire the background controller for optional Cmd+T in-tab interception
+ * and closed picker session cleanup.
  * @param {object} browserApi
- * @param {{ pendingTimeoutMs?: number, blurGraceMs?: number, now?: () => number, generateId?: () => string }} [options]
+ * @param {{ pendingTimeoutMs?: number }} [options]
  */
 export function createBackgroundController(browserApi, options = {}) {
   let initialized = false;
   let initPromise = null;
-  let sessionManager;
+  let sessionsListenerAttached = false;
 
-  const settingsState = createSettingsState(browserApi, {
-    onDisabled: () => sessionManager.blurDismissActive(),
-  });
-
-  sessionManager = createSessionManager(browserApi, {
-    isEnabled: () => settingsState.isEnabled(),
-    blurGraceMs: options.blurGraceMs,
-    now: options.now,
-    generateId: options.generateId,
-  });
+  const settingsState = createSettingsState(browserApi);
+  const closedSessionCleaner = createClosedSessionCleaner(browserApi);
 
   const tabWatcher = createTabWatcher(browserApi, {
-    isEnabled: () => settingsState.isEnabled(),
-    getActivePopupWindowId: () => sessionManager.getActivePopupWindowId(),
-    onNewTabDetected: (tab) => sessionManager.triggerForTab(tab),
+    isEnabled: () => settingsState.isNewTabModeEnabled(),
+    onNewTabDetected: (tab) => openInTabPicker(tab),
     pendingTimeoutMs: options.pendingTimeoutMs,
   });
 
-  const messageHandler = createMessageHandler(browserApi, {
-    sessionManager,
-    settingsState,
-    ignoreTab: (tabId) => tabWatcher.ignoreTab(tabId),
-  });
+  async function openInTabPicker(tab) {
+    let parentWindow;
+    try {
+      parentWindow = await browserApi.windows.get(tab.windowId, {
+        populate: true,
+      });
+    } catch {
+      return;
+    }
 
-  const closedSessionCleaner = createClosedSessionCleaner(browserApi);
+    if (
+      !settingsState.isNewTabModeEnabled() ||
+      !shouldTriggerForWindow(parentWindow)
+    ) {
+      return;
+    }
+
+    const { enabled: containersEnabled } = await getAvailableContainers(
+      browserApi.contextualIdentities
+    );
+    if (!settingsState.isNewTabModeEnabled() || !containersEnabled) {
+      return;
+    }
+
+    let targetIndex = tab.index;
+    if (typeof browserApi.tabs?.get === "function") {
+      try {
+        const freshTab = await browserApi.tabs.get(tab.id);
+        if (
+          !freshTab ||
+          classifyTabUrl(freshTab.url || freshTab.pendingUrl) === "other"
+        ) {
+          return;
+        }
+        if (typeof freshTab.index === "number") {
+          targetIndex = freshTab.index;
+        }
+      } catch {
+        return;
+      }
+    }
+
+    const url = `${getPickerUrlPrefix(browserApi.runtime)}?mode=tab`;
+    let pickerTab;
+    try {
+      pickerTab = await browserApi.tabs.create({
+        windowId: tab.windowId,
+        index: targetIndex,
+        url,
+        active: true,
+      });
+    } catch {
+      return;
+    }
+
+    if (typeof pickerTab?.id === "number") {
+      tabWatcher.ignoreTab(pickerTab.id);
+    }
+
+    try {
+      await browserApi.tabs.remove(tab.id);
+    } catch {
+      // Placeholder tab already closed
+    }
+  }
+
+  async function handleTabsPermissionRevoked() {
+    if (!settingsState.isNewTabModeEnabled()) {
+      return;
+    }
+
+    try {
+      await saveSettings(browserApi.storage?.local, {
+        [STORAGE_KEY_OPEN_ON_NEW_TAB]: false,
+      });
+    } catch {
+      // Continue updating runtime state even if storage write fails
+    }
+
+    settingsState.handleStorageChanged(
+      { [STORAGE_KEY_OPEN_ON_NEW_TAB]: { newValue: false } },
+      "local"
+    );
+  }
 
   async function ensureInitialized() {
     if (initialized) {
       return;
     }
-    if (initPromise) {
-      return initPromise;
+    if (!initPromise) {
+      initPromise = (async () => {
+        await settingsState.init();
+        await closedSessionCleaner.purge();
+        initialized = true;
+      })();
     }
-
-    initPromise = (async () => {
-      await settingsState.init();
-      await sessionManager.restore();
-      await closedSessionCleaner.purge();
-      initialized = true;
-    })();
 
     try {
       await initPromise;
     } finally {
       initPromise = null;
     }
+
+    if (
+      settingsState.isNewTabModeEnabled() &&
+      typeof browserApi.permissions?.contains === "function"
+    ) {
+      try {
+        const hasTabs = await browserApi.permissions.contains({
+          permissions: ["tabs"],
+        });
+        if (!hasTabs) {
+          await handleTabsPermissionRevoked();
+        }
+      } catch {
+        // Ignore permission inspection failures
+      }
+    }
+  }
+
+  const onSessionsChanged = async () => {
+    // Do not await ensureInitialized(): initPromise itself invokes purge(),
+    // which can trigger sessions.onChanged before initialization settles.
+    await closedSessionCleaner.purge();
+  };
+
+  function attachSessionsListener() {
+    if (
+      sessionsListenerAttached ||
+      typeof browserApi.sessions?.onChanged?.addListener !== "function"
+    ) {
+      return;
+    }
+    browserApi.sessions.onChanged.addListener(onSessionsChanged);
+    sessionsListenerAttached = true;
   }
 
   function registerListeners() {
@@ -73,40 +176,30 @@ export function createBackgroundController(browserApi, options = {}) {
     );
     browserApi.tabs?.onRemoved?.addListener(async (tabId) => {
       tabWatcher.handleTabRemoved(tabId);
-      await ensureInitialized();
-      await sessionManager.handleTabRemoved(tabId);
-    });
-    browserApi.windows?.onFocusChanged?.addListener(async (windowId) => {
-      await ensureInitialized();
-      await sessionManager.handleWindowFocusChanged(windowId);
-    });
-    browserApi.windows?.onRemoved?.addListener(async (windowId) => {
-      await ensureInitialized();
-      await sessionManager.handleWindowRemoved(windowId);
       await closedSessionCleaner.purge();
     });
-    browserApi.sessions?.onChanged?.addListener(async () => {
-      // Do not await ensureInitialized(): initPromise itself invokes purge(),
-      // which can trigger sessions.onChanged before initialization settles.
+    browserApi.windows?.onRemoved?.addListener(async () => {
       await closedSessionCleaner.purge();
     });
-    browserApi.action?.onClicked?.addListener(async () => {
-      await ensureInitialized();
-      await settingsState.toggleEnabled();
+    attachSessionsListener();
+    browserApi.permissions?.onAdded?.addListener(async (added) => {
+      if (added?.permissions?.includes("sessions")) {
+        attachSessionsListener();
+        await closedSessionCleaner.purge();
+      }
+    });
+    browserApi.permissions?.onRemoved?.addListener(async (removed) => {
+      if (removed?.permissions?.includes("tabs")) {
+        await ensureInitialized();
+        await handleTabsPermissionRevoked();
+      }
     });
     browserApi.storage?.onChanged?.addListener(async (changes, areaName) => {
       if (areaName !== "local" || !changes) {
         return;
       }
       await ensureInitialized();
-      await settingsState.handleStorageChanged(changes, areaName);
-    });
-    browserApi.runtime?.onMessage?.addListener(async (message) => {
-      if (!message || typeof message.type !== "string") {
-        return undefined;
-      }
-      await ensureInitialized();
-      return messageHandler.handleMessage(message);
+      settingsState.handleStorageChanged(changes, areaName);
     });
     browserApi.runtime?.onInstalled?.addListener(() => ensureInitialized());
     browserApi.runtime?.onStartup?.addListener(() => ensureInitialized());
@@ -117,15 +210,18 @@ export function createBackgroundController(browserApi, options = {}) {
 
   return {
     ensureInitialized,
-    isEnabled: () => settingsState.isEnabled(),
+    isNewTabModeEnabled: () => settingsState.isNewTabModeEnabled(),
     getSettings: () => settingsState.getSettings(),
-    getActiveSession: () => sessionManager.getActiveSession(),
     destroy() {
       tabWatcher.destroy();
+      if (sessionsListenerAttached) {
+        browserApi.sessions?.onChanged?.removeListener?.(onSessionsChanged);
+        sessionsListenerAttached = false;
+      }
     },
   };
 }
 
-if (typeof globalThis.browser !== "undefined" && globalThis.browser?.tabs) {
+if (typeof globalThis.browser !== "undefined" && globalThis.browser?.runtime) {
   createBackgroundController(globalThis.browser);
 }

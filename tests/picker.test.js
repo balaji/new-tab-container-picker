@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createPickerController } from "../src/picker/picker.js";
+import { UNAVAILABLE_MESSAGES, createPickerController } from "../src/picker/picker.js";
 
-function createFakeDom() {
+function createFakeDom(search = "") {
   class FakeClassList {
     constructor(el) {
       this.el = el;
@@ -36,6 +36,7 @@ function createFakeDom() {
       this.children = [];
       this.listeners = new Map();
       this.hidden = false;
+      this.disabled = false;
       this.value = "";
       this._textContent = "";
       this.focused = false;
@@ -81,6 +82,7 @@ function createFakeDom() {
       }
     }
     focus() {
+      if (this.disabled) return;
       this.focused = true;
       doc.activeElement = this;
     }
@@ -95,6 +97,7 @@ function createFakeDom() {
     }
   }
 
+  const documentElement = new FakeElement("html");
   const searchInput = new FakeElement("input");
   searchInput.id = "container-search";
   const listEl = new FakeElement("ul");
@@ -119,6 +122,7 @@ function createFakeDom() {
   const winListeners = new Map();
 
   const doc = {
+    documentElement,
     activeElement: null,
     getElementById: (id) => elementsById.get(id) ?? null,
     createElement: (tag) => new FakeElement(tag),
@@ -165,14 +169,13 @@ function createFakeDom() {
     },
   };
 
-  // Override replaceChildren for DocumentFragment objects
   const origReplace = listEl.replaceChildren.bind(listEl);
   listEl.replaceChildren = (fragment) => {
     origReplace(...(fragment.children ?? [fragment]));
   };
 
   const win = {
-    location: { search: "?session=sess-1" },
+    location: { search },
     closed: false,
     close() {
       this.closed = true;
@@ -192,55 +195,94 @@ function createFakeDom() {
     },
   };
 
-  return { doc, win, searchInput, listEl, emptyStateEl, settingsBtn };
+  return { doc, win, searchInput, listEl, emptyStateEl, announcerEl, settingsBtn };
 }
 
-test("picker renders Default transparent row + colored containers, navigates with arrows, filters, and picks on Enter/click/Escape", async () => {
-  const { doc, win, searchInput, listEl, emptyStateEl } = createFakeDom();
-  const sentMessages = [];
+const SAMPLE_IDENTITIES = [
+  {
+    cookieStoreId: "firefox-container-1",
+    name: "Personal",
+    color: "blue",
+    colorCode: "#37adff",
+    icon: "fingerprint",
+    iconUrl: "resource://usercontext-content/fingerprint.svg",
+  },
+  {
+    cookieStoreId: "firefox-container-2",
+    name: "Play",
+    color: "turquoise",
+    colorCode: "#00c79a",
+    icon: "circle",
+    iconUrl: "resource://usercontext-content/circle.svg",
+  },
+  {
+    cookieStoreId: "firefox-container-3",
+    name: "Work",
+    color: "orange",
+    colorCode: "#ff9f00",
+    icon: "briefcase",
+    iconUrl: "resource://usercontext-content/briefcase.svg",
+  },
+];
+
+function createTestPickerApi({
+  identities = SAMPLE_IDENTITIES,
+  incognito = false,
+  autoOpenSingleMatch = false,
+  containersMode = "enabled",
+} = {}) {
+  const createdTabs = [];
+  let openOptionsCalls = 0;
 
   const browserApi = {
-    runtime: {
-      async sendMessage(msg) {
-        sentMessages.push(msg);
-        if (msg.type === "GET_PICKER_STATE") {
-          return {
-            sessionId: "sess-1",
-            containers: [
-              {
-                cookieStoreId: "firefox-default",
-                name: "Default",
-                color: "transparent",
-                colorCode: null,
-                icon: null,
-                iconUrl: null,
-                isDefault: true,
-              },
-              {
-                cookieStoreId: "firefox-container-1",
-                name: "Personal",
-                color: "blue",
-                colorCode: "#37adff",
-                icon: "fingerprint",
-                iconUrl: "resource://usercontext-content/fingerprint.svg",
-                isDefault: false,
-              },
-              {
-                cookieStoreId: "firefox-container-2",
-                name: "Work",
-                color: "orange",
-                colorCode: "#ff9f00",
-                icon: "briefcase",
-                iconUrl: "resource://usercontext-content/briefcase.svg",
-                isDefault: false,
-              },
-            ],
-          };
+    windows: {
+      async getCurrent() {
+        return { id: 1, incognito };
+      },
+    },
+    contextualIdentities: {
+      async query() {
+        if (containersMode === "throw") {
+          throw new Error("Contextual identities disabled");
         }
-        return { ok: true };
+        if (containersMode === "empty") {
+          return [];
+        }
+        return identities.map((c) => ({ ...c }));
+      },
+    },
+    storage: {
+      local: {
+        async get() {
+          return { autoOpenSingleMatch };
+        },
+      },
+    },
+    tabs: {
+      async create(props) {
+        createdTabs.push(props);
+        return { id: 100 + createdTabs.length, ...props };
+      },
+    },
+    runtime: {
+      async openOptionsPage() {
+        openOptionsCalls += 1;
       },
     },
   };
+
+  return {
+    browserApi,
+    createdTabs,
+    getOpenOptionsCalls: () => openOptionsCalls,
+  };
+}
+
+test("picker highlights first container initially, puts Default last, navigates, filters, and opens tab on Enter", async () => {
+  const { doc, win, searchInput, listEl, emptyStateEl } = createFakeDom();
+  const { browserApi, createdTabs } = createTestPickerApi({
+    identities: [SAMPLE_IDENTITIES[0], SAMPLE_IDENTITIES[2]],
+  });
 
   const controller = await createPickerController({
     browserApi,
@@ -248,15 +290,14 @@ test("picker renders Default transparent row + colored containers, navigates wit
     win,
   });
 
-  // Search box autofocused, Default initially highlighted
+  assert.equal(doc.documentElement.getAttribute("data-mode"), null);
   assert.equal(searchInput.focused, true);
   assert.equal(listEl.children.length, 3);
-  assert.equal(listEl.children[0].classList.contains("container-item--default"), true);
+  assert.equal(listEl.children[0].classList.contains("container-item--colored"), true);
+  assert.equal(listEl.children[0].style.getPropertyValue("--container-color"), "#37adff");
   assert.equal(listEl.children[0].getAttribute("aria-selected"), "true");
-  assert.equal(listEl.children[1].classList.contains("container-item--colored"), true);
-  assert.equal(listEl.children[1].style.getPropertyValue("--container-color"), "#37adff");
+  assert.equal(listEl.children[2].classList.contains("container-item--default"), true);
 
-  // ArrowDown moves to Personal, ArrowUp wraps back to Work
   doc.dispatchKeyDown("ArrowDown");
   assert.equal(controller.getState().activeIndex, 1);
   assert.equal(listEl.children[1].getAttribute("aria-selected"), "true");
@@ -266,214 +307,110 @@ test("picker renders Default transparent row + colored containers, navigates wit
   assert.equal(controller.getState().activeIndex, 2);
   assert.equal(listEl.children[2].getAttribute("aria-selected"), "true");
 
-  // Typing filters list and resets activeIndex to top match (0)
   searchInput.value = "per";
   searchInput.dispatchEvent({ type: "input" });
   assert.equal(listEl.children.length, 1);
   assert.equal(controller.getState().activeIndex, 0);
   assert.equal(emptyStateEl.hidden, true);
 
-  // Non-matching query displays empty state
   searchInput.value = "nope";
   searchInput.dispatchEvent({ type: "input" });
   assert.equal(listEl.children.length, 0);
   assert.equal(emptyStateEl.hidden, false);
 
-  // Clear filter and press Enter -> picks Work after moving down twice
   searchInput.value = "";
   searchInput.dispatchEvent({ type: "input" });
   doc.dispatchKeyDown("ArrowDown");
-  doc.dispatchKeyDown("ArrowDown");
   doc.dispatchKeyDown("Enter");
+  await Promise.resolve();
 
-  assert.deepEqual(sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-1",
-    cookieStoreId: "firefox-container-2",
-  });
+  assert.deepEqual(createdTabs, [
+    { cookieStoreId: "firefox-container-3", active: true },
+  ]);
+  assert.equal(win.closed, true);
 
   controller.destroy();
 });
 
-test("picker sends CANCEL_ESCAPE on Escape and PICK_CONTAINER on click", async () => {
-  const { doc, win, listEl } = createFakeDom();
-  const sentMessages = [];
-
-  const browserApi = {
-    runtime: {
-      async sendMessage(msg) {
-        sentMessages.push(msg);
-        if (msg.type === "GET_PICKER_STATE") {
-          return {
-            sessionId: "sess-2",
-            containers: [
-              {
-                cookieStoreId: "firefox-default",
-                name: "Default",
-                color: "transparent",
-                colorCode: null,
-                icon: null,
-                iconUrl: null,
-                isDefault: true,
-              },
-              {
-                cookieStoreId: "firefox-container-1",
-                name: "Personal",
-                color: "blue",
-                colorCode: "#37adff",
-                icon: "fingerprint",
-                iconUrl: null,
-                isDefault: false,
-              },
-            ],
-          };
-        }
-        return { ok: true };
-      },
-    },
-  };
-
-  const controllerA = await createPickerController({ browserApi, doc, win });
-  doc.dispatchKeyDown("Escape");
-  assert.deepEqual(sentMessages.at(-1), {
-    type: "CANCEL_ESCAPE",
-    sessionId: "sess-2",
+test("picker closes on Escape without creating a tab and opens Default tab on click", async () => {
+  const domA = createFakeDom();
+  const apiA = createTestPickerApi({
+    identities: [SAMPLE_IDENTITIES[0]],
   });
+
+  const controllerA = await createPickerController({
+    browserApi: apiA.browserApi,
+    doc: domA.doc,
+    win: domA.win,
+  });
+  domA.doc.dispatchKeyDown("Escape");
+  await Promise.resolve();
+  assert.deepEqual(apiA.createdTabs, []);
+  assert.equal(domA.win.closed, true);
   controllerA.destroy();
 
-  const dom2 = createFakeDom();
-  const controllerB = await createPickerController({
-    browserApi,
-    doc: dom2.doc,
-    win: dom2.win,
+  const domB = createFakeDom();
+  const apiB = createTestPickerApi({
+    identities: [SAMPLE_IDENTITIES[0]],
   });
-  dom2.listEl.children[1].dispatchEvent({
+  const controllerB = await createPickerController({
+    browserApi: apiB.browserApi,
+    doc: domB.doc,
+    win: domB.win,
+  });
+  domB.listEl.children[1].dispatchEvent({
     type: "click",
     preventDefault() {},
   });
-  assert.deepEqual(sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-2",
-    cookieStoreId: "firefox-container-1",
-  });
+  await Promise.resolve();
+  assert.deepEqual(apiB.createdTabs, [{ active: true }]);
+  assert.equal(domB.win.closed, true);
   controllerB.destroy();
 });
 
-const SAMPLE_CONTAINERS = [
-  {
-    cookieStoreId: "firefox-default",
-    name: "Default",
-    color: "transparent",
-    colorCode: null,
-    icon: null,
-    iconUrl: null,
-    isDefault: true,
-  },
-  {
-    cookieStoreId: "firefox-container-1",
-    name: "Personal",
-    color: "blue",
-    colorCode: "#37adff",
-    icon: "fingerprint",
-    iconUrl: "resource://usercontext-content/fingerprint.svg",
-    isDefault: false,
-  },
-  {
-    cookieStoreId: "firefox-container-2",
-    name: "Play",
-    color: "turquoise",
-    colorCode: "#00c79a",
-    icon: "circle",
-    iconUrl: "resource://usercontext-content/circle.svg",
-    isDefault: false,
-  },
-  {
-    cookieStoreId: "firefox-container-3",
-    name: "Work",
-    color: "orange",
-    colorCode: "#ff9f00",
-    icon: "briefcase",
-    iconUrl: "resource://usercontext-content/briefcase.svg",
-    isDefault: false,
-  },
-];
+test("autoOpenSingleMatch disabled does not auto-open when narrowed to 1 match", async () => {
+  const { doc, win, searchInput, listEl } = createFakeDom();
+  const { browserApi, createdTabs } = createTestPickerApi({
+    autoOpenSingleMatch: false,
+  });
+  const controller = await createPickerController({ browserApi, doc, win });
 
-function createTestPickerApi({
-  sessionId = "sess-auto",
-  containers = SAMPLE_CONTAINERS,
-  settings,
-} = {}) {
-  const sentMessages = [];
-  const browserApi = {
-    runtime: {
-      async sendMessage(msg) {
-        sentMessages.push(msg);
-        if (msg.type === "GET_PICKER_STATE") {
-          const response = { sessionId, containers };
-          if (settings !== undefined) {
-            response.settings = settings;
-          }
-          return response;
-        }
-        return { ok: true };
-      },
-    },
-  };
-  return { browserApi, sentMessages };
-}
+  searchInput.value = "wo";
+  searchInput.dispatchEvent({ type: "input" });
+  await Promise.resolve();
 
-test("autoOpenSingleMatch disabled or omitted does not auto-open when narrowed to 1 match", async () => {
-  for (const settings of [undefined, { autoOpenSingleMatch: false }]) {
-    const { doc, win, searchInput, listEl } = createFakeDom();
-    const { browserApi, sentMessages } = createTestPickerApi({ settings });
-    const controller = await createPickerController({ browserApi, doc, win });
-
-    searchInput.value = "wo";
-    searchInput.dispatchEvent({ type: "input" });
-    await Promise.resolve();
-
-    assert.equal(listEl.children.length, 1);
-    assert.equal(sentMessages.length, 1); // only GET_PICKER_STATE
-    controller.destroy();
-  }
+  assert.equal(listEl.children.length, 1);
+  assert.equal(createdTabs.length, 0);
+  assert.equal(win.closed, false);
+  controller.destroy();
 });
 
 test("autoOpenSingleMatch auto-opens named container or Default when search narrows to 1 result", async () => {
   const dom1 = createFakeDom();
-  const api1 = createTestPickerApi({
-    sessionId: "sess-named",
-    settings: { autoOpenSingleMatch: true },
-  });
+  const api1 = createTestPickerApi({ autoOpenSingleMatch: true });
   const ctrl1 = await createPickerController({
     browserApi: api1.browserApi,
     doc: dom1.doc,
     win: dom1.win,
   });
 
-  // "p" matches Personal and Play (2 matches) -> should NOT auto-open
   dom1.searchInput.value = "p";
   dom1.searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
   assert.equal(dom1.listEl.children.length, 2);
-  assert.equal(api1.sentMessages.length, 1);
+  assert.equal(api1.createdTabs.length, 0);
 
-  // "pe" narrows to Personal (1 match) -> auto-opens
   dom1.searchInput.value = "pe";
   dom1.searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
-  assert.deepEqual(api1.sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-named",
-    cookieStoreId: "firefox-container-1",
-  });
+  assert.deepEqual(api1.createdTabs, [
+    { cookieStoreId: "firefox-container-1", active: true },
+  ]);
+  assert.equal(dom1.win.closed, true);
   ctrl1.destroy();
 
-  // Narrowing to Default also auto-opens Default
   const dom2 = createFakeDom();
-  const api2 = createTestPickerApi({
-    sessionId: "sess-default",
-    settings: { autoOpenSingleMatch: true },
-  });
+  const api2 = createTestPickerApi({ autoOpenSingleMatch: true });
   const ctrl2 = await createPickerController({
     browserApi: api2.browserApi,
     doc: dom2.doc,
@@ -483,52 +420,37 @@ test("autoOpenSingleMatch auto-opens named container or Default when search narr
   dom2.searchInput.value = "def";
   dom2.searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
-  assert.deepEqual(api2.sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-default",
-    cookieStoreId: "firefox-default",
-  });
+  assert.deepEqual(api2.createdTabs, [{ active: true }]);
+  assert.equal(dom2.win.closed, true);
   ctrl2.destroy();
 });
 
 test("autoOpenSingleMatch does not auto-open on initial render, whitespace query, 2+ matches, or 0 matches", async () => {
-  const domSingle = createFakeDom();
-  const apiSingle = createTestPickerApi({
-    containers: [SAMPLE_CONTAINERS[0]],
-    settings: { autoOpenSingleMatch: true },
-  });
-  const ctrlSingle = await createPickerController({
-    browserApi: apiSingle.browserApi,
-    doc: domSingle.doc,
-    win: domSingle.win,
-  });
-  assert.equal(apiSingle.sentMessages.length, 1);
-  ctrlSingle.destroy();
-
   const { doc, win, searchInput } = createFakeDom();
-  const { browserApi, sentMessages } = createTestPickerApi({
-    settings: { autoOpenSingleMatch: true },
+  const { browserApi, createdTabs } = createTestPickerApi({
+    autoOpenSingleMatch: true,
   });
   const controller = await createPickerController({ browserApi, doc, win });
+
+  assert.equal(createdTabs.length, 0);
 
   searchInput.value = "   ";
   searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
-  assert.equal(sentMessages.length, 1);
+  assert.equal(createdTabs.length, 0);
 
   searchInput.value = "zzz";
   searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
-  assert.equal(sentMessages.length, 1);
+  assert.equal(createdTabs.length, 0);
 
   controller.destroy();
 });
 
 test("autoOpenSingleMatch defers during IME composition and triggers on compositionend", async () => {
   const { doc, win, searchInput } = createFakeDom();
-  const { browserApi, sentMessages } = createTestPickerApi({
-    sessionId: "sess-ime",
-    settings: { autoOpenSingleMatch: true },
+  const { browserApi, createdTabs } = createTestPickerApi({
+    autoOpenSingleMatch: true,
   });
   const controller = await createPickerController({ browserApi, doc, win });
 
@@ -536,87 +458,87 @@ test("autoOpenSingleMatch defers during IME composition and triggers on composit
   searchInput.value = "wo";
   searchInput.dispatchEvent({ type: "input", isComposing: true });
   await Promise.resolve();
-  assert.equal(sentMessages.length, 1); // still composing
+  assert.equal(createdTabs.length, 0);
 
   searchInput.dispatchEvent({ type: "compositionend" });
   await Promise.resolve();
-  assert.deepEqual(sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-ime",
-    cookieStoreId: "firefox-container-3",
-  });
+  assert.deepEqual(createdTabs, [
+    { cookieStoreId: "firefox-container-3", active: true },
+  ]);
+  assert.equal(win.closed, true);
 
   controller.destroy();
 });
 
-test("autoOpenSingleMatch honors typing entered before GET_PICKER_STATE resolves", async () => {
+test("autoOpenSingleMatch honors typing entered before loadState resolves", async () => {
   const { doc, win, searchInput } = createFakeDom();
-  const sentMessages = [];
-  let resolveState;
+  const createdTabs = [];
+  let notifyQueryStarted;
+  const queryStarted = new Promise((resolve) => {
+    notifyQueryStarted = resolve;
+  });
+  let resolveQuery;
   const browserApi = {
-    runtime: {
-      sendMessage(msg) {
-        sentMessages.push(msg);
-        if (msg.type === "GET_PICKER_STATE") {
-          return new Promise((resolve) => {
-            resolveState = resolve;
-          });
-        }
-        return Promise.resolve({ ok: true });
+    windows: { getCurrent: async () => ({ incognito: false }) },
+    contextualIdentities: {
+      query: () => {
+        notifyQueryStarted();
+        return new Promise((resolve) => {
+          resolveQuery = resolve;
+        });
+      },
+    },
+    storage: {
+      local: { get: async () => ({ autoOpenSingleMatch: true }) },
+    },
+    tabs: {
+      async create(props) {
+        createdTabs.push(props);
+        return { id: 101, ...props };
       },
     },
   };
 
   const controllerPromise = createPickerController({ browserApi, doc, win });
+  await queryStarted;
 
-  // User types before GET_PICKER_STATE completes
   searchInput.value = "work";
   searchInput.dispatchEvent({ type: "input" });
-  assert.equal(sentMessages.length, 1);
+  assert.equal(createdTabs.length, 0);
 
-  resolveState({
-    sessionId: "sess-early",
-    containers: SAMPLE_CONTAINERS,
-    settings: { autoOpenSingleMatch: true },
-  });
+  resolveQuery(SAMPLE_IDENTITIES);
   const controller = await controllerPromise;
   await Promise.resolve();
 
-  assert.deepEqual(sentMessages.at(-1), {
-    type: "PICK_CONTAINER",
-    sessionId: "sess-early",
-    cookieStoreId: "firefox-container-3",
-  });
+  assert.deepEqual(createdTabs, [
+    { cookieStoreId: "firefox-container-3", active: true },
+  ]);
+  assert.equal(win.closed, true);
   controller.destroy();
 });
 
-test("settings button sends OPEN_OPTIONS on click and keeps keyboard accessibility", async () => {
+test("settings button opens options page, closes popup, and keeps keyboard accessibility", async () => {
   const domA = createFakeDom();
-  const apiA = createTestPickerApi({ sessionId: "sess-opt-1" });
+  const apiA = createTestPickerApi();
   const ctrlA = await createPickerController({
     browserApi: apiA.browserApi,
     doc: domA.doc,
     win: domA.win,
   });
 
-  // Focusing settingsBtn should NOT swallow Enter or Space in global keydown
   domA.settingsBtn.focus();
   assert.equal(domA.doc.dispatchKeyDown("Enter"), false);
   assert.equal(domA.doc.dispatchKeyDown(" "), false);
-  assert.equal(apiA.sentMessages.length, 1);
+  assert.equal(apiA.getOpenOptionsCalls(), 0);
 
-  // Clicking settingsBtn sends OPEN_OPTIONS
   domA.settingsBtn.dispatchEvent({ type: "click" });
   await Promise.resolve();
-  assert.deepEqual(apiA.sentMessages.at(-1), {
-    type: "OPEN_OPTIONS",
-    sessionId: "sess-opt-1",
-  });
+  assert.equal(apiA.getOpenOptionsCalls(), 1);
+  assert.equal(domA.win.closed, true);
   ctrlA.destroy();
 
-  // Escape still cancels even when settings button is focused; ArrowDown returns focus to searchInput
   const domB = createFakeDom();
-  const apiB = createTestPickerApi({ sessionId: "sess-opt-2" });
+  const apiB = createTestPickerApi();
   const ctrlB = await createPickerController({
     browserApi: apiB.browserApi,
     doc: domB.doc,
@@ -630,9 +552,150 @@ test("settings button sends OPEN_OPTIONS on click and keeps keyboard accessibili
   domB.settingsBtn.focus();
   domB.doc.dispatchKeyDown("Escape");
   await Promise.resolve();
-  assert.deepEqual(apiB.sentMessages.at(-1), {
-    type: "CANCEL_ESCAPE",
-    sessionId: "sess-opt-2",
-  });
+  assert.equal(domB.win.closed, true);
   ctrlB.destroy();
+});
+
+test("unavailable states (private window and disabled containers) display notice and keep Escape and Settings working", async () => {
+  const privDom = createFakeDom();
+  const privApi = createTestPickerApi({ incognito: true });
+  const privCtrl = await createPickerController({
+    browserApi: privApi.browserApi,
+    doc: privDom.doc,
+    win: privDom.win,
+  });
+
+  assert.equal(privDom.win.closed, false);
+  assert.equal(privDom.searchInput.disabled, true);
+  assert.equal(privDom.emptyStateEl.hidden, false);
+  assert.equal(
+    privDom.emptyStateEl.textContent,
+    UNAVAILABLE_MESSAGES["private-window"]
+  );
+  assert.equal(privCtrl.getState().unavailableReason, "private-window");
+  assert.equal(privCtrl.getState().activeIndex, -1);
+
+  privDom.doc.dispatchKeyDown("Escape");
+  await Promise.resolve();
+  assert.equal(privDom.win.closed, true);
+  privCtrl.destroy();
+
+  const disDom = createFakeDom();
+  const disApi = createTestPickerApi({ containersMode: "throw" });
+  const disCtrl = await createPickerController({
+    browserApi: disApi.browserApi,
+    doc: disDom.doc,
+    win: disDom.win,
+  });
+
+  assert.equal(disDom.win.closed, false);
+  assert.equal(disDom.searchInput.disabled, true);
+  assert.equal(disDom.emptyStateEl.hidden, false);
+  assert.equal(
+    disDom.emptyStateEl.textContent,
+    UNAVAILABLE_MESSAGES["containers-disabled"]
+  );
+  assert.equal(disCtrl.getState().unavailableReason, "containers-disabled");
+
+  disDom.settingsBtn.dispatchEvent({ type: "click" });
+  await Promise.resolve();
+  assert.equal(disApi.getOpenOptionsCalls(), 1);
+  assert.equal(disDom.win.closed, true);
+  disCtrl.destroy();
+});
+
+test("picker in-tab mode (?mode=tab) sets data-mode=tab, replaces current tab on pick/Escape, and closes tab on Settings", async () => {
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  const createdA = [];
+  const removedA = [];
+  const domA = createFakeDom("?mode=tab");
+  const apiA = createTestPickerApi();
+  apiA.browserApi.tabs = {
+    async getCurrent() {
+      return { id: 42, windowId: 10, index: 2 };
+    },
+    async create(props) {
+      createdA.push(props);
+      return { id: 43, ...props };
+    },
+    async remove(id) {
+      removedA.push(id);
+    },
+  };
+
+  const ctrlA = await createPickerController({
+    browserApi: apiA.browserApi,
+    doc: domA.doc,
+    win: domA.win,
+  });
+  assert.equal(domA.doc.documentElement.getAttribute("data-mode"), "tab");
+  domA.doc.dispatchKeyDown("Enter");
+  await flushMicrotasks();
+  assert.deepEqual(createdA, [
+    {
+      windowId: 10,
+      index: 2,
+      cookieStoreId: "firefox-container-1",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(removedA, [42]);
+  assert.equal(domA.win.closed, false);
+  ctrlA.destroy();
+
+  // Escape in in-tab mode opens Default tab with openerTabId and removes picker tab
+  const createdB = [];
+  const removedB = [];
+  const domB = createFakeDom("?mode=tab");
+  const apiB = createTestPickerApi();
+  apiB.browserApi.tabs = {
+    async getCurrent() {
+      return { id: 50, windowId: 10, index: 1 };
+    },
+    async create(props) {
+      createdB.push(props);
+      return { id: 51, ...props };
+    },
+    async remove(id) {
+      removedB.push(id);
+    },
+  };
+
+  const ctrlB = await createPickerController({
+    browserApi: apiB.browserApi,
+    doc: domB.doc,
+    win: domB.win,
+  });
+  domB.doc.dispatchKeyDown("Escape");
+  await flushMicrotasks();
+  assert.deepEqual(createdB, [
+    { windowId: 10, index: 1, active: true, openerTabId: 50 },
+  ]);
+  assert.deepEqual(removedB, [50]);
+  ctrlB.destroy();
+
+  // Clicking Settings in in-tab mode opens options page and removes picker tab
+  const removedC = [];
+  const domC = createFakeDom("?mode=tab");
+  const apiC = createTestPickerApi();
+  apiC.browserApi.tabs.getCurrent = async () => ({ id: 60, windowId: 10, index: 0 });
+  apiC.browserApi.tabs.remove = async (id) => {
+    removedC.push(id);
+  };
+
+  const ctrlC = await createPickerController({
+    browserApi: apiC.browserApi,
+    doc: domC.doc,
+    win: domC.win,
+  });
+  domC.settingsBtn.dispatchEvent({ type: "click" });
+  await flushMicrotasks();
+  assert.equal(apiC.getOpenOptionsCalls(), 1);
+  assert.deepEqual(removedC, [60]);
+  ctrlC.destroy();
 });
