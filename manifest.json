@@ -31,5 +31,9 @@
     "default_icon": {
       "32": "icons/icon.svg"
     }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": false
   }
 }

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>New Tab Container Picker Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="options-page">
+    <section class="settings-list" aria-label="Picker settings">
+      <label class="setting-row" for="setting-enabled">
+        <span class="setting-copy">
+          <span class="setting-title">Enable container picker on new tabs</span>
+          <span id="setting-enabled-desc" class="setting-description">
+            Show the container picker popup whenever you open a new tab. You can also pause or resume from the toolbar button.
+          </span>
+        </span>
+        <span class="toggle-control">
+          <input
+            id="setting-enabled"
+            class="toggle-input"
+            type="checkbox"
+            aria-describedby="setting-enabled-desc"
+          >
+          <span class="toggle-track" aria-hidden="true"></span>
+        </span>
+      </label>
+
+      <label class="setting-row" for="setting-auto-open">
+        <span class="setting-copy">
+          <span class="setting-title">Auto-open on single search match</span>
+          <span id="setting-auto-open-desc" class="setting-description">
+            Automatically open the matching container tab without pressing Enter as soon as your search narrows the list down to one result.
+          </span>
+        </span>
+        <span class="toggle-control">
+          <input
+            id="setting-auto-open"
+            class="toggle-input"
+            type="checkbox"
+            aria-describedby="setting-auto-open-desc"
+          >
+          <span class="toggle-track" aria-hidden="true"></span>
+        </span>
+      </label>
+    </section>
+
+    <p id="save-status" class="save-status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

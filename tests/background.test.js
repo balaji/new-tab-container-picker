@@ -76,6 +76,7 @@ function createMockBrowser(initial = {}) {
   const createdWindowsLog = [];
   const removedTabsLog = [];
   const removedWindowsLog = [];
+  let openOptionsCalls = 0;
 
   const tabsOnCreated = createEventEmitter();
   const tabsOnUpdated = createEventEmitter();
@@ -83,6 +84,7 @@ function createMockBrowser(initial = {}) {
   const windowsOnFocusChanged = createEventEmitter();
   const windowsOnRemoved = createEventEmitter();
   const actionOnClicked = createEventEmitter();
+  const storageOnChanged = createEventEmitter();
   const runtimeOnMessage = createEventEmitter();
   const runtimeOnInstalled = createEventEmitter();
   const runtimeOnStartup = createEventEmitter();
@@ -228,15 +230,41 @@ function createMockBrowser(initial = {}) {
       },
     },
     storage: {
+      onChanged: storageOnChanged,
       local: {
         async get(key) {
           if (typeof key === "string") {
             return key in localStore ? { [key]: localStore[key] } : {};
           }
+          if (Array.isArray(key)) {
+            const out = {};
+            for (const k of key) {
+              if (k in localStore) out[k] = localStore[k];
+            }
+            return out;
+          }
+          if (key && typeof key === "object") {
+            const out = {};
+            for (const [k, fallback] of Object.entries(key)) {
+              out[k] = k in localStore ? localStore[k] : fallback;
+            }
+            return out;
+          }
           return { ...localStore };
         },
         async set(obj) {
-          Object.assign(localStore, obj);
+          const changes = {};
+          for (const [k, v] of Object.entries(obj)) {
+            const hadKey = k in localStore;
+            const oldValue = localStore[k];
+            localStore[k] = v;
+            if (!hadKey || oldValue !== v) {
+              changes[k] = { oldValue, newValue: v };
+            }
+          }
+          if (Object.keys(changes).length > 0) {
+            await storageOnChanged.emit(changes, "local");
+          }
         },
       },
       session: {
@@ -276,6 +304,9 @@ function createMockBrowser(initial = {}) {
       getURL(path) {
         return `moz-extension://test-uuid/${path}`;
       },
+      async openOptionsPage() {
+        openOptionsCalls += 1;
+      },
       async sendMessage(msg) {
         const results = await runtimeOnMessage.emit(msg);
         return results[0];
@@ -294,6 +325,7 @@ function createMockBrowser(initial = {}) {
     createdWindowsLog,
     removedTabsLog,
     removedWindowsLog,
+    getOpenOptionsCalls: () => openOptionsCalls,
     setContainersMode(mode) {
       containersMode = mode;
     },
@@ -566,6 +598,106 @@ test("10. Toolbar icon toggles paused (OFF badge) and suppresses picker until re
 
   await mock.simulateNewTab({ url: "about:newtab" });
   assert.equal(mock.createdWindowsLog.length, 1);
+
+  controller.destroy();
+});
+
+test("11. GET_PICKER_STATE defaults autoOpenSingleMatch to false and reflects stored true", async () => {
+  const mockDefault = createMockBrowser();
+  const controllerDefault = createBackgroundController(mockDefault.browser);
+  await controllerDefault.ensureInitialized();
+
+  await mockDefault.simulateNewTab({ url: "about:newtab" });
+  const defaultState = await mockDefault.browser.runtime.sendMessage({
+    type: "GET_PICKER_STATE",
+  });
+  assert.deepEqual(defaultState.settings, { autoOpenSingleMatch: false });
+  assert.deepEqual(controllerDefault.getSettings(), {
+    enabled: true,
+    autoOpenSingleMatch: false,
+  });
+  controllerDefault.destroy();
+
+  const mockEnabled = createMockBrowser({
+    localStorage: { autoOpenSingleMatch: true },
+  });
+  const controllerEnabled = createBackgroundController(mockEnabled.browser);
+  await controllerEnabled.ensureInitialized();
+
+  await mockEnabled.simulateNewTab({ url: "about:newtab" });
+  const enabledState = await mockEnabled.browser.runtime.sendMessage({
+    type: "GET_PICKER_STATE",
+  });
+  assert.deepEqual(enabledState.settings, { autoOpenSingleMatch: true });
+  assert.deepEqual(controllerEnabled.getSettings(), {
+    enabled: true,
+    autoOpenSingleMatch: true,
+  });
+  controllerEnabled.destroy();
+});
+
+test("12. Changing autoOpenSingleMatch in storage.local updates controller and GET_PICKER_STATE", async () => {
+  const mock = createMockBrowser();
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  await mock.browser.storage.local.set({ autoOpenSingleMatch: true });
+  assert.equal(controller.getSettings().autoOpenSingleMatch, true);
+
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const state = await mock.browser.runtime.sendMessage({
+    type: "GET_PICKER_STATE",
+  });
+  assert.equal(state.settings.autoOpenSingleMatch, true);
+
+  controller.destroy();
+});
+
+test("13. Changing enabled to false via storage.onChanged updates badge, dismisses popup, and suppresses new tabs", async () => {
+  const mock = createMockBrowser();
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
+  const popupId = controller.getActiveSession().popupWindowId;
+
+  await mock.browser.storage.local.set({ enabled: false });
+  assert.equal(controller.isEnabled(), false);
+  assert.equal(mock.badgeState.text, "OFF");
+  assert.equal(mock.windowsMap.has(popupId), false);
+  assert.equal(mock.tabsMap.has(placeholder.id), true);
+  assert.equal(controller.getActiveSession(), null);
+
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdWindowsLog.length, 1);
+
+  controller.destroy();
+});
+
+test("14. OPEN_OPTIONS closes popup, focuses parent window, keeps placeholder tab, clears session, and opens options page", async () => {
+  const mock = createMockBrowser();
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const placeholder = await mock.simulateNewTab({ url: "about:newtab" });
+  const state = await mock.browser.runtime.sendMessage({
+    type: "GET_PICKER_STATE",
+  });
+  const popupId = controller.getActiveSession().popupWindowId;
+
+  await mock.browser.windows.update(10, { focused: false });
+
+  const res = await mock.browser.runtime.sendMessage({
+    type: "OPEN_OPTIONS",
+    sessionId: state.sessionId,
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(mock.getOpenOptionsCalls(), 1);
+  assert.equal(mock.windowsMap.has(popupId), false);
+  assert.equal(mock.windowsMap.get(10).focused, true);
+  assert.equal(mock.tabsMap.has(placeholder.id), true);
+  assert.equal(controller.getActiveSession(), null);
 
   controller.destroy();
 });

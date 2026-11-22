@@ -4,12 +4,17 @@ import {
 } from "./lib/containers.js";
 import { computePopupBounds } from "./lib/geometry.js";
 import {
+  DEFAULT_SETTINGS,
+  STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_ENABLED,
+  loadSettings,
+} from "./lib/settings.js";
+import {
   classifyTabUrl,
   shouldIgnoreCreatedTab,
   shouldTriggerForWindow,
 } from "./lib/tab-detection.js";
 
-const STORAGE_KEY_ENABLED = "enabled";
 const STORAGE_KEY_SESSION = "activeSession";
 const DEFAULT_PENDING_TIMEOUT_MS = 180;
 const DEFAULT_BLUR_GRACE_MS = 250;
@@ -32,7 +37,8 @@ export function createBackgroundController(browserApi, options = {}) {
         ? globalThis.crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
-  let enabled = true;
+  let enabled = DEFAULT_SETTINGS.enabled;
+  let autoOpenSingleMatch = DEFAULT_SETTINGS.autoOpenSingleMatch;
   let initialized = false;
   let initPromise = null;
   let activeSession = null;
@@ -104,16 +110,9 @@ export function createBackgroundController(browserApi, options = {}) {
     }
 
     initPromise = (async () => {
-      try {
-        const stored = await browserApi.storage?.local?.get(STORAGE_KEY_ENABLED);
-        if (stored && typeof stored[STORAGE_KEY_ENABLED] === "boolean") {
-          enabled = stored[STORAGE_KEY_ENABLED];
-        } else {
-          enabled = true;
-        }
-      } catch {
-        enabled = true;
-      }
+      const settings = await loadSettings(browserApi.storage?.local);
+      enabled = settings[STORAGE_KEY_ENABLED];
+      autoOpenSingleMatch = settings[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
 
       try {
         const sessionData = await browserApi.storage?.session?.get(
@@ -451,6 +450,34 @@ export function createBackgroundController(browserApi, options = {}) {
     }
   }
 
+  async function handleStorageChanged(changes, areaName) {
+    if (areaName !== "local" || !changes) {
+      return;
+    }
+
+    await ensureInitialized();
+
+    if (STORAGE_KEY_ENABLED in changes) {
+      const next = changes[STORAGE_KEY_ENABLED]?.newValue;
+      enabled =
+        typeof next === "boolean"
+          ? next
+          : DEFAULT_SETTINGS[STORAGE_KEY_ENABLED];
+      await syncBadge(enabled);
+      if (!enabled && activeSession && !activeSession.settled) {
+        await blurDismissSession(activeSession);
+      }
+    }
+
+    if (STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH in changes) {
+      const next = changes[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]?.newValue;
+      autoOpenSingleMatch =
+        typeof next === "boolean"
+          ? next
+          : DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
+    }
+  }
+
   function matchSession(messageSessionId) {
     if (!activeSession || activeSession.settled) {
       return null;
@@ -476,6 +503,9 @@ export function createBackgroundController(browserApi, options = {}) {
       return {
         sessionId: session.sessionId,
         containers: session.containers,
+        settings: {
+          autoOpenSingleMatch,
+        },
       };
     }
 
@@ -568,6 +598,23 @@ export function createBackgroundController(browserApi, options = {}) {
       return { ok: true };
     }
 
+    if (message.type === "OPEN_OPTIONS") {
+      const session = matchSession(message.sessionId);
+      if (session) {
+        session.settled = true;
+        activeSession = null;
+        await persistSession(null);
+        await closePopupWindow(session.popupWindowId);
+        await focusParentWindow(session.parentWindowId);
+      }
+      try {
+        await browserApi.runtime?.openOptionsPage?.();
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    }
+
     return undefined;
   }
 
@@ -578,6 +625,7 @@ export function createBackgroundController(browserApi, options = {}) {
     browserApi.windows?.onFocusChanged?.addListener(handleWindowFocusChanged);
     browserApi.windows?.onRemoved?.addListener(handleWindowRemoved);
     browserApi.action?.onClicked?.addListener(handleActionClicked);
+    browserApi.storage?.onChanged?.addListener(handleStorageChanged);
     browserApi.runtime?.onMessage?.addListener(handleMessage);
     browserApi.runtime?.onInstalled?.addListener(() => ensureInitialized());
     browserApi.runtime?.onStartup?.addListener(() => ensureInitialized());
@@ -589,6 +637,7 @@ export function createBackgroundController(browserApi, options = {}) {
   return {
     ensureInitialized,
     isEnabled: () => enabled,
+    getSettings: () => ({ enabled, autoOpenSingleMatch }),
     getActiveSession: () => activeSession,
     destroy() {
       for (const tabId of pendingTabs.keys()) {

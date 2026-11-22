@@ -61,24 +61,37 @@ body {
 .search-header {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding: 10px 12px;
   background-color: var(--surface-header);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
+.search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
 .search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 16px;
   height: 16px;
   color: var(--text-muted);
-  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .search-input {
+  display: block;
   width: 100%;
   min-width: 0;
-  padding: 6px 8px;
+  padding-block: 6px;
+  padding-inline: 34px 10px;
   border: 1px solid transparent;
   border-radius: 6px;
   background-color: transparent;
@@ -231,10 +244,48 @@ body {
   flex-shrink: 0;
 }
 
+.footer-hints {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background-color: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 110ms ease, color 110ms ease;
+}
+
+.settings-button:hover {
+  background-color: light-dark(rgba(21, 20, 26, 0.08), rgba(251, 251, 254, 0.12));
+  color: var(--text-primary);
+}
+
+.settings-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.settings-icon {
+  width: 14px;
+  height: 14px;
 }
 
 kbd {
@@ -250,7 +301,8 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .container-item {
+  .container-item,
+  .settings-button {
     transition: none;
   }
 }
@@ -258,6 +310,23 @@ kbd {
 @media (forced-colors: active) {
   .search-input {
     border-color: ButtonBorder;
+  }
+
+  .search-icon {
+    color: FieldText;
+  }
+
+  .settings-button {
+    border-color: ButtonBorder;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  .settings-button:hover,
+  .settings-button:focus-visible {
+    border-color: Highlight;
+    color: HighlightText;
+    background-color: Highlight;
   }
 
   .container-item {
