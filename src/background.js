@@ -1,3 +1,4 @@
+import { createClosedSessionCleaner } from "./background/closed-session-cleaner.js";
 import { createMessageHandler } from "./background/message-handler.js";
 import { createSessionManager } from "./background/session-manager.js";
 import { createSettingsState } from "./background/settings-state.js";
@@ -38,6 +39,8 @@ export function createBackgroundController(browserApi, options = {}) {
     ignoreTab: (tabId) => tabWatcher.ignoreTab(tabId),
   });
 
+  const closedSessionCleaner = createClosedSessionCleaner(browserApi);
+
   async function ensureInitialized() {
     if (initialized) {
       return;
@@ -49,6 +52,7 @@ export function createBackgroundController(browserApi, options = {}) {
     initPromise = (async () => {
       await settingsState.init();
       await sessionManager.restore();
+      await closedSessionCleaner.purge();
       initialized = true;
     })();
 
@@ -79,6 +83,12 @@ export function createBackgroundController(browserApi, options = {}) {
     browserApi.windows?.onRemoved?.addListener(async (windowId) => {
       await ensureInitialized();
       await sessionManager.handleWindowRemoved(windowId);
+      await closedSessionCleaner.purge();
+    });
+    browserApi.sessions?.onChanged?.addListener(async () => {
+      // Do not await ensureInitialized(): initPromise itself invokes purge(),
+      // which can trigger sessions.onChanged before initialization settles.
+      await closedSessionCleaner.purge();
     });
     browserApi.action?.onClicked?.addListener(async () => {
       await ensureInitialized();
