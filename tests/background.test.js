@@ -76,6 +76,12 @@ function createMockBrowser(initial = {}) {
   const createdWindowsLog = [];
   const removedTabsLog = [];
   const removedWindowsLog = [];
+  const recentlyClosed = (initial.recentlyClosed ?? []).map((entry) =>
+    structuredClone(entry)
+  );
+  const forgottenWindowsLog = [];
+  const forgottenTabsLog = [];
+  let nextSessionId = 1;
   let openOptionsCalls = 0;
 
   const tabsOnCreated = createEventEmitter();
@@ -83,6 +89,7 @@ function createMockBrowser(initial = {}) {
   const tabsOnRemoved = createEventEmitter();
   const windowsOnFocusChanged = createEventEmitter();
   const windowsOnRemoved = createEventEmitter();
+  const sessionsOnChanged = createEventEmitter();
   const actionOnClicked = createEventEmitter();
   const storageOnChanged = createEventEmitter();
   const runtimeOnMessage = createEventEmitter();
@@ -204,15 +211,26 @@ function createMockBrowser(initial = {}) {
         return { ...win };
       },
       async remove(windowId) {
-        if (!windowsMap.has(windowId)) throw new Error(`No window ${windowId}`);
-        windowsMap.delete(windowId);
-        removedWindowsLog.push(windowId);
+        const win = windowsMap.get(windowId);
+        if (!win) throw new Error(`No window ${windowId}`);
+        const winTabs = [];
         for (const [tId, t] of [...tabsMap.entries()]) {
           if (t.windowId === windowId) {
+            winTabs.push({ ...t });
             tabsMap.delete(tId);
           }
         }
+        windowsMap.delete(windowId);
+        removedWindowsLog.push(windowId);
+        recentlyClosed.unshift({
+          window: {
+            ...win,
+            sessionId: `win-sess-${nextSessionId++}`,
+            tabs: winTabs,
+          },
+        });
         await windowsOnRemoved.emit(windowId);
+        await sessionsOnChanged.emit();
       },
     },
     contextualIdentities: {
@@ -297,6 +315,34 @@ function createMockBrowser(initial = {}) {
         badgeState.title = title;
       },
     },
+    sessions: {
+      onChanged: sessionsOnChanged,
+      async getRecentlyClosed() {
+        return recentlyClosed.map((entry) => structuredClone(entry));
+      },
+      async forgetClosedWindow(sessionId) {
+        const idx = recentlyClosed.findIndex(
+          (entry) => entry.window?.sessionId === sessionId
+        );
+        if (idx !== -1) {
+          recentlyClosed.splice(idx, 1);
+        }
+        forgottenWindowsLog.push(sessionId);
+        void sessionsOnChanged.emit();
+      },
+      async forgetClosedTab(windowId, sessionId) {
+        const idx = recentlyClosed.findIndex(
+          (entry) =>
+            entry.tab?.windowId === windowId &&
+            entry.tab?.sessionId === sessionId
+        );
+        if (idx !== -1) {
+          recentlyClosed.splice(idx, 1);
+        }
+        forgottenTabsLog.push({ windowId, sessionId });
+        void sessionsOnChanged.emit();
+      },
+    },
     runtime: {
       onMessage: runtimeOnMessage,
       onInstalled: runtimeOnInstalled,
@@ -325,9 +371,24 @@ function createMockBrowser(initial = {}) {
     createdWindowsLog,
     removedTabsLog,
     removedWindowsLog,
+    recentlyClosed,
+    forgottenWindowsLog,
+    forgottenTabsLog,
     getOpenOptionsCalls: () => openOptionsCalls,
     setContainersMode(mode) {
       containersMode = mode;
+    },
+    async simulateClosedUserTab(url = "https://example.com", windowId = 10) {
+      const tabSession = {
+        tab: {
+          windowId,
+          sessionId: `tab-sess-${nextSessionId++}`,
+          url,
+        },
+      };
+      recentlyClosed.unshift(tabSession);
+      await sessionsOnChanged.emit();
+      return structuredClone(tabSession);
     },
     async simulateNewTab(overrides = {}) {
       const id = nextTabId++;
@@ -698,6 +759,129 @@ test("14. OPEN_OPTIONS closes popup, focuses parent window, keeps placeholder ta
   assert.equal(mock.windowsMap.get(10).focused, true);
   assert.equal(mock.tabsMap.has(placeholder.id), true);
   assert.equal(controller.getActiveSession(), null);
+
+  controller.destroy();
+});
+
+test("15. All popup close paths purge popup window from sessions.recentlyClosed and keep user tab at index 0", async () => {
+  let fakeNow = 1000;
+  const mock = createMockBrowser();
+  const controller = createBackgroundController(mock.browser, {
+    blurGraceMs: 250,
+    now: () => fakeNow,
+  });
+  await controller.ensureInitialized();
+
+  await mock.simulateClosedUserTab("https://example.com");
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  // 1) Picking Default
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const s1 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
+  await mock.browser.runtime.sendMessage({
+    type: "PICK_CONTAINER",
+    sessionId: s1.sessionId,
+    cookieStoreId: "firefox-default",
+  });
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  // 2) Picking a named container
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const s2 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
+  await mock.browser.runtime.sendMessage({
+    type: "PICK_CONTAINER",
+    sessionId: s2.sessionId,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  // 3) Pressing Escape
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const s3 = await mock.browser.runtime.sendMessage({ type: "GET_PICKER_STATE" });
+  await mock.browser.runtime.sendMessage({
+    type: "CANCEL_ESCAPE",
+    sessionId: s3.sessionId,
+  });
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  // 4) Blur-dismiss by focusing parent window past grace period
+  await mock.simulateNewTab({ url: "about:newtab" });
+  fakeNow += 300;
+  await mock.browser.windows.onFocusChanged.emit(10);
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  // 5) External popup window close
+  await mock.simulateNewTab({ url: "about:newtab" });
+  const popupId = controller.getActiveSession().popupWindowId;
+  await mock.browser.windows.remove(popupId);
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, "https://example.com");
+
+  assert.equal(mock.forgottenWindowsLog.length, 5);
+  assert.equal(new Set(mock.forgottenWindowsLog).size, 5);
+
+  controller.destroy();
+});
+
+test("16. Initialization sweeps pre-existing closed picker popups without touching user sessions or deadlocking", async () => {
+  const mock = createMockBrowser({
+    recentlyClosed: [
+      {
+        window: {
+          sessionId: "stale-picker-win",
+          tabs: [
+            {
+              url: "moz-extension://test-uuid/src/picker/picker.html?session=old",
+            },
+          ],
+        },
+      },
+      {
+        window: {
+          sessionId: "user-win",
+          tabs: [{ url: "https://mozilla.org" }],
+        },
+      },
+      {
+        tab: {
+          windowId: 10,
+          sessionId: "user-tab",
+          url: "https://example.com",
+        },
+      },
+    ],
+  });
+
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  assert.deepEqual(mock.forgottenWindowsLog, ["stale-picker-win"]);
+  assert.equal(mock.recentlyClosed.length, 2);
+  assert.equal(mock.recentlyClosed[0].window.sessionId, "user-win");
+  assert.equal(mock.recentlyClosed[1].tab.sessionId, "user-tab");
+
+  // Late sessions.onChanged event for an external picker closure also sweeps cleanly
+  mock.recentlyClosed.unshift({
+    window: {
+      sessionId: "late-picker-win",
+      tabs: [
+        {
+          url: "moz-extension://test-uuid/src/picker/picker.html?session=late",
+        },
+      ],
+    },
+  });
+  await mock.browser.sessions.onChanged.emit();
+  assert.deepEqual(mock.forgottenWindowsLog, [
+    "stale-picker-win",
+    "late-picker-win",
+  ]);
+  assert.equal(mock.recentlyClosed.length, 2);
 
   controller.destroy();
 });
