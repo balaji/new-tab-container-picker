@@ -1,6 +1,6 @@
 {
   "name": "new-tab-container-picker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Choose a Firefox Multi-Account Container via a quick searchable popup whenever you open a new tab.",
