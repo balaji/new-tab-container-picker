@@ -8,11 +8,11 @@ Firefox already provides a way to always ask for a container while opening a new
 
 <p align="center"><i>Firefox settings for Container</i></p>
 
-![](./assets/firefox%20setting.png)
+<img src="./assets/firefox%20setting.png" width="300" />
 
 <p align="center"><i>Container picker view on mouse click (Default behaviour)</i></p>
 
-![](./assets/default%20firefox%20behavior.png)
+<img src="assets/default%20firefox%20behavior.png" width="200" />
 
 This extension provides a way to use a shortcut of your own OR override the default cmd+T shortcut.
 
@@ -24,15 +24,15 @@ This extension provides a way to use a shortcut of your own OR override the defa
 
 <p align="center"><i>Overrides Cmd+T/Ctrl+T to show container picker</i></p>
 
-![](./assets/picker%20in%20new%20tab.png)
+<img src="assets/picker%20in%20new%20tab.png" />
 
 <p align="center"><i>Settings page (automatically open the container when there is only one match)</i></p>
 
-![](./assets/settings.png)
+<img src="assets/settings.png" />
 
 <p align="center"><i>Don't override cmd+T, instead use the toolbar icon via custom keyboard shortcut</i></p>
 
-![](./assets/picker%20via%20toolbar%20icon.png)
+<img src="assets/picker%20via%20toolbar%20icon.png" />
 
 
 ## Prerequisites
