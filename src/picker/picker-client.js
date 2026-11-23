@@ -6,14 +6,20 @@ import { loadSettings } from "../lib/settings.js";
 import { parseHttpUrl } from "../lib/tab-detection.js";
 import { PREVIEW_CONTAINERS } from "./preview-data.js";
 
+export const OPEN_TAB_ERROR_MESSAGE =
+  "Couldn\u2019t open the tab. Try again or choose another container.";
+
 /**
  * Manage picker state loading, settled guard, and tab creation for both
  * native toolbar popups and in-tab (?mode=tab) new-tab replacement.
+ * The picker is only dismissed after the replacement tab was created, so a
+ * pending external link (?url=) is never silently dropped.
  * @param {{
  *   browserApi?: object,
  *   win: Window,
  *   announcer: { clear: () => void, announceImmediate: (text: string) => void },
  *   onPreviewReset?: () => void,
+ *   onError?: (message: string) => void,
  * }} deps
  */
 export function createPickerClient({
@@ -21,6 +27,7 @@ export function createPickerClient({
   win,
   announcer,
   onPreviewReset,
+  onError,
 }) {
   const params = new URLSearchParams(win.location?.search ?? "");
   const isInTabMode = params.get("mode") === "tab";
@@ -29,6 +36,15 @@ export function createPickerClient({
     !browserApi?.contextualIdentities && params.get("preview") === "1";
 
   let settled = false;
+
+  /**
+   * Re-enable the picker after a failed tab creation and surface the error.
+   */
+  function reportOpenFailure() {
+    settled = false;
+    announcer.announceImmediate(OPEN_TAB_ERROR_MESSAGE);
+    onError?.(OPEN_TAB_ERROR_MESSAGE);
+  }
 
   async function closeInTabOrWindow(existingTab) {
     if (isInTabMode) {
@@ -106,10 +122,11 @@ export function createPickerClient({
     try {
       await browserApi?.tabs?.create?.(props);
     } catch {
-      // Proceed to close current picker tab
-    } finally {
-      await closeInTabOrWindow(currentTab);
+      // Keep the picker (and any pending target URL) so the user can retry
+      return false;
     }
+    await closeInTabOrWindow(currentTab);
+    return true;
   }
 
   /**
@@ -193,7 +210,9 @@ export function createPickerClient({
         : { cookieStoreId };
 
     if (isInTabMode) {
-      await replaceCurrentPickerTab(createProps);
+      if (!(await replaceCurrentPickerTab(createProps))) {
+        reportOpenFailure();
+      }
       return;
     }
 
@@ -208,10 +227,11 @@ export function createPickerClient({
     try {
       await browserApi?.tabs?.create?.(popupCreateProps);
     } catch {
-      // Close popup cleanly even if tab creation fails
-    } finally {
-      win.close?.();
+      // Keep the popup open so the user can retry or pick another container
+      reportOpenFailure();
+      return;
     }
+    win.close?.();
   }
 
   /**
@@ -231,7 +251,9 @@ export function createPickerClient({
     }
 
     if (isInTabMode) {
-      await replaceCurrentPickerTab({});
+      if (!(await replaceCurrentPickerTab({}))) {
+        reportOpenFailure();
+      }
       return;
     }
 
@@ -240,6 +262,7 @@ export function createPickerClient({
 
   /**
    * Open extension preferences and dismiss the picker (or announce unavailable in preview mode).
+   * When an external link is pending, the in-tab picker stays open so the link is not lost.
    */
   async function openSettings() {
     if (settled) {
@@ -248,6 +271,15 @@ export function createPickerClient({
 
     if (isPreviewMode) {
       announcer.announceImmediate("Preview mode: settings unavailable");
+      return;
+    }
+
+    if (isInTabMode && targetUrl) {
+      try {
+        await browserApi?.runtime?.openOptionsPage?.();
+      } catch {
+        // Ignore openOptionsPage failures; the picker remains usable
+      }
       return;
     }
 

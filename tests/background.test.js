@@ -984,3 +984,90 @@ test("11. webRequest listener attaches synchronously at startup for MV3 wake-up 
 
   controller.destroy();
 });
+
+test("12. If the picker cannot be shown after cancelling an external link, the original URL is restored instead of lost", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  // Navigating to the picker page fails (e.g. tab is in a transient state)
+  const originalUpdate = mock.browser.tabs.update;
+  mock.browser.tabs.update = async (tabId, props) => {
+    if (String(props.url).startsWith("moz-extension://")) {
+      throw new Error("Cannot navigate to picker");
+    }
+    return originalUpdate(tabId, props);
+  };
+
+  const externalTab = await mock.simulateNewTab({ url: "about:blank" });
+  const targetUrl = "https://docs.example.com/shared/doc-1";
+  const responses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(responses, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.updatedTabsLog.length, 1);
+  assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
+  assert.equal(mock.updatedTabsLog[0].props.url, targetUrl);
+
+  // The restored navigation is allowed through rather than intercepted again
+  const restoredResponses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(restoredResponses, [{}]);
+
+  controller.destroy();
+});
+
+test("13. Container-inherited external link restores the URL in its original tab when the picker tab cannot be created", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const externalTab = await mock.simulateNewTab({
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+  });
+
+  mock.browser.tabs.create = async () => {
+    throw new Error("Cannot create picker tab");
+  };
+
+  const targetUrl = "https://jira.example.com/browse/ABC-1";
+  const responses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(responses, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(mock.removedTabsLog, []);
+  assert.equal(mock.updatedTabsLog.length, 1);
+  assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
+  assert.equal(mock.updatedTabsLog[0].props.url, targetUrl);
+
+  controller.destroy();
+});

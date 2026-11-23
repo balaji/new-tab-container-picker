@@ -35,6 +35,7 @@ const EXTERNAL_LINK_REQUEST_FILTER = Object.freeze({
  * @param {{
  *   pendingTimeoutMs?: number,
  *   candidateTtlMs?: number,
+ *   coldCreateGraceMs?: number,
  *   debugLog?: (event: string, data?: Record<string, unknown>) => void,
  * }} [options]
  */
@@ -65,6 +66,7 @@ export function createBackgroundController(browserApi, options = {}) {
     onExternalLinkDetected: (details) => openExternalLinkPicker(details),
     debugLog,
     candidateTtlMs: options.candidateTtlMs,
+    coldCreateGraceMs: options.coldCreateGraceMs,
   });
 
   async function openInTabPicker(tab) {
@@ -231,12 +233,14 @@ export function createBackgroundController(browserApi, options = {}) {
 
     const timerId = setTimeout(() => {
       scheduledTimers.delete(timerId);
+      const mode = isDefaultContainer ? "update" : "replace";
       Promise.resolve()
         .then(async () => {
           if (isDefaultContainer) {
-            if (typeof browserApi.tabs?.update === "function") {
-              await browserApi.tabs.update(tabId, { url: pickerUrl });
+            if (typeof browserApi.tabs?.update !== "function") {
+              throw new Error("tabs.update unavailable");
             }
+            await browserApi.tabs.update(tabId, { url: pickerUrl });
             return;
           }
 
@@ -258,17 +262,42 @@ export function createBackgroundController(browserApi, options = {}) {
             // Placeholder tab already closed
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
           debugLog("picker:error", {
             tabId,
-            mode: isDefaultContainer ? "update" : "replace",
+            mode,
             error: error?.message,
           });
+          await restoreCancelledNavigation(tabId, url, tab.cookieStoreId);
         });
     }, 0);
     scheduledTimers.add(timerId);
 
     return true;
+  }
+
+  /**
+   * The original external-link request was already cancelled; if the picker could
+   * not be shown, load the link in its original tab so it is never silently lost.
+   * @param {number} tabId
+   * @param {string} url
+   * @param {string | undefined} cookieStoreId
+   */
+  async function restoreCancelledNavigation(tabId, url, cookieStoreId) {
+    if (typeof browserApi.tabs?.update !== "function") {
+      return;
+    }
+    externalLinkWatcher.allowNextNavigation(url, cookieStoreId);
+    try {
+      await browserApi.tabs.update(tabId, { url });
+      debugLog("picker:restored", { tabId, url });
+    } catch (error) {
+      debugLog("picker:restore-failed", {
+        tabId,
+        url,
+        error: error?.message,
+      });
+    }
   }
 
   async function handleTabsPermissionRevoked() {

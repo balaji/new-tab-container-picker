@@ -307,6 +307,19 @@ html[data-mode="tab"] .list-wrapper {
   line-height: 1.45;
 }
 
+.picker-error {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: light-dark(#c50042, #ff848b);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.picker-error[hidden] {
+  display: none;
+}
+
 .picker-footer {
   display: flex;
   align-items: center;

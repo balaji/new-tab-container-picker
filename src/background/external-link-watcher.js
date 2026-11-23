@@ -8,6 +8,7 @@ import { isOwnPickerUrl } from "./browser-actions.js";
 
 export const DEFAULT_CANDIDATE_TTL_MS = 5000;
 export const DEFAULT_ALLOWANCE_TTL_MS = 5000;
+export const DEFAULT_COLD_CREATE_GRACE_MS = 150;
 
 function normalizeRequestKey(rawUrl) {
   const normalized = parseHttpUrl(rawUrl);
@@ -36,6 +37,7 @@ function normalizeRequestKey(rawUrl) {
  *   debugLog?: (event: string, data?: Record<string, unknown>) => void,
  *   candidateTtlMs?: number,
  *   allowanceTtlMs?: number,
+ *   coldCreateGraceMs?: number,
  * }} [deps]
  */
 export function createExternalLinkWatcher(browserApi, deps = {}) {
@@ -46,10 +48,60 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
   const debugLog = typeof deps.debugLog === "function" ? deps.debugLog : () => {};
   const candidateTtlMs = deps.candidateTtlMs ?? DEFAULT_CANDIDATE_TTL_MS;
   const allowanceTtlMs = deps.allowanceTtlMs ?? DEFAULT_ALLOWANCE_TTL_MS;
+  const coldCreateGraceMs =
+    deps.coldCreateGraceMs ?? DEFAULT_COLD_CREATE_GRACE_MS;
 
   const candidateTabs = new Map();
   const settledTabs = new Set();
   const allowedNavigations = new Set();
+  /** @type {Map<number, Set<(tracked: boolean) => void>>} */
+  const candidateWaiters = new Map();
+
+  function notifyCandidateWaiters(tabId, tracked) {
+    const waiters = candidateWaiters.get(tabId);
+    if (!waiters) {
+      return;
+    }
+    candidateWaiters.delete(tabId);
+    for (const resolve of waiters) {
+      resolve(tracked);
+    }
+  }
+
+  /**
+   * Wait briefly for tabs.onCreated to register a tab as a candidate.
+   * Reloads, session-restored tabs, and discarded-tab activations never fire
+   * tabs.onCreated, so they resolve false after the grace period.
+   * @param {number} tabId
+   * @returns {Promise<boolean>}
+   */
+  function waitForCandidate(tabId) {
+    if (candidateTabs.has(tabId)) {
+      return Promise.resolve(true);
+    }
+    if (coldCreateGraceMs <= 0) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      let waiters = candidateWaiters.get(tabId);
+      if (!waiters) {
+        waiters = new Set();
+        candidateWaiters.set(tabId, waiters);
+      }
+      const timerId = setTimeout(() => {
+        waiters.delete(settle);
+        if (waiters.size === 0 && candidateWaiters.get(tabId) === waiters) {
+          candidateWaiters.delete(tabId);
+        }
+        resolve(false);
+      }, coldCreateGraceMs);
+      const settle = (tracked) => {
+        clearTimeout(timerId);
+        resolve(tracked);
+      };
+      waiters.add(settle);
+    });
+  }
 
   function clearCandidate(tabId) {
     const timerId = candidateTabs.get(tabId);
@@ -74,6 +126,9 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
     settledTabs.clear();
     for (const entry of [...allowedNavigations]) {
       clearAllowedEntry(entry);
+    }
+    for (const tabId of [...candidateWaiters.keys()]) {
+      notifyCandidateWaiters(tabId, false);
     }
   }
 
@@ -212,6 +267,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       debugLog("candidate:expired", { tabId: tab.id });
     }, candidateTtlMs);
     candidateTabs.set(tab.id, timerId);
+    notifyCandidateWaiters(tab.id, true);
     debugLog("track:candidate", {
       tabId: tab.id,
       url: tab.url,
@@ -381,24 +437,37 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       typeof browserApi.tabs?.get === "function"
     ) {
       // Handle both cold wake-up and warm races where webRequest.onBeforeRequest
-      // arrives before tabs.onCreated. Only match "pending" (about:blank / empty)
-      // when warm so Cmd+R reload or existing-tab navigation is never hijacked.
+      // arrives before tabs.onCreated. A tab still on "pending" (about:blank / empty)
+      // is a brand-new tab. On cold wake-up, Firefox may already report the target
+      // URL on the new tab, but that is indistinguishable from a Cmd+R reload,
+      // session restore, or discarded-tab activation of an existing tab. Only accept
+      // it when tabs.onCreated confirms the tab was just created.
       try {
         const freshTab = await browserApi.tabs.get(details.tabId);
         const freshUrl = getEffectiveTabUrl(freshTab);
         const freshKind = classifyTabUrl(freshUrl);
-        const urlMatchesFallback =
-          freshKind === "pending" ||
-          (options.allowColdFallback && parseHttpUrl(freshUrl) === targetUrl);
-
-        if (
+        const isEligibleTab = Boolean(
           freshTab &&
-          freshTab.incognito !== true &&
-          freshTab.pinned !== true &&
-          freshTab.openerTabId === undefined &&
-          !isOwnTab(freshTab) &&
-          urlMatchesFallback
+            freshTab.incognito !== true &&
+            freshTab.pinned !== true &&
+            freshTab.openerTabId === undefined &&
+            !isOwnTab(freshTab)
+        );
+
+        // tabs.onCreated may have registered the tab while tabs.get was pending.
+        let urlMatchesFallback =
+          freshKind === "pending" || candidateTabs.has(details.tabId);
+        if (
+          !urlMatchesFallback &&
+          isEligibleTab &&
+          options.allowColdFallback &&
+          parseHttpUrl(freshUrl) === targetUrl
         ) {
+          urlMatchesFallback = await waitForCandidate(details.tabId);
+        }
+        clearCandidate(details.tabId);
+
+        if (isEligibleTab && urlMatchesFallback) {
           isCandidate = true;
           matchSource = options.allowColdFallback
             ? "cold-fallback"

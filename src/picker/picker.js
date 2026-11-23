@@ -29,6 +29,7 @@ export async function createPickerController(deps = {}) {
   const settingsBtn = doc.getElementById("open-settings");
   const targetUrlBanner = doc.getElementById("target-url-banner");
   const targetUrlText = doc.getElementById("target-url-text");
+  const errorEl = doc.getElementById("picker-error");
 
   let allContainers = [];
   let filteredContainers = [];
@@ -54,6 +55,14 @@ export async function createPickerController(deps = {}) {
     }
   }
 
+  function setErrorMessage(message) {
+    if (!errorEl) {
+      return;
+    }
+    errorEl.textContent = message ?? "";
+    errorEl.hidden = !message;
+  }
+
   const client = createPickerClient({
     browserApi,
     win,
@@ -61,6 +70,10 @@ export async function createPickerController(deps = {}) {
     onPreviewReset: () => {
       searchInput.value = "";
       applyFilter();
+    },
+    onError: (message) => {
+      setErrorMessage(message);
+      focusSearchInput();
     },
   });
 
@@ -87,6 +100,7 @@ export async function createPickerController(deps = {}) {
   }
 
   function pickContainer(cookieStoreId) {
+    setErrorMessage("");
     const chosen = allContainers.find((c) => c.cookieStoreId === cookieStoreId);
     return client.pickContainer(cookieStoreId, chosen?.name);
   }

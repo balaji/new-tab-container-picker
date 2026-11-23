@@ -457,3 +457,108 @@ test("externalLinkWatcher consumes one-shot allowance when our own picker reques
 
   watcher.destroy();
 });
+
+test("externalLinkWatcher cold fallback never hijacks reloads, session restore, or discarded-tab activation of existing tabs", async () => {
+  const existingUrl = "https://mail.example.com/inbox";
+  const tabsById = new Map([
+    [
+      70,
+      {
+        id: 70,
+        windowId: 10,
+        url: existingUrl,
+        cookieStoreId: "firefox-default",
+        incognito: false,
+        pinned: false,
+      },
+    ],
+  ]);
+
+  const detected = [];
+  const watcher = createExternalLinkWatcher(createMockExternalBrowser(tabsById), {
+    isEnabled: () => true,
+    coldCreateGraceMs: 20,
+    onExternalLinkDetected: async (details) => {
+      detected.push(details);
+      return true;
+    },
+  });
+
+  const reloadRequest = {
+    tabId: 70,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: existingUrl,
+    cookieStoreId: "firefox-default",
+  };
+
+  // Cold wake-up + existing tab reloading its own URL (no tabs.onCreated) is NOT intercepted
+  assert.deepEqual(
+    await watcher.handleBeforeRequest(reloadRequest, { allowColdFallback: true }),
+    {}
+  );
+  // ...and the tab is settled so later reloads skip tabs.get entirely
+  assert.deepEqual(
+    await watcher.handleBeforeRequest(reloadRequest, { allowColdFallback: true }),
+    {}
+  );
+  assert.deepEqual(detected, []);
+
+  watcher.destroy();
+});
+
+test("externalLinkWatcher cold fallback intercepts a new tab already showing the target URL once tabs.onCreated confirms it", async () => {
+  const targetUrl = "https://slack.example.com/archives/C1/p2";
+  const tabsById = new Map([
+    [
+      71,
+      {
+        id: 71,
+        windowId: 10,
+        url: targetUrl,
+        cookieStoreId: "firefox-default",
+        incognito: false,
+        pinned: false,
+      },
+    ],
+  ]);
+
+  const detected = [];
+  const watcher = createExternalLinkWatcher(createMockExternalBrowser(tabsById), {
+    isEnabled: () => true,
+    coldCreateGraceMs: 200,
+    onExternalLinkDetected: async (details) => {
+      detected.push(details);
+      return true;
+    },
+  });
+
+  const pending = watcher.handleBeforeRequest(
+    {
+      tabId: 71,
+      type: "main_frame",
+      frameId: 0,
+      method: "GET",
+      url: targetUrl,
+      cookieStoreId: "firefox-default",
+    },
+    { allowColdFallback: true }
+  );
+
+  // tabs.onCreated is dispatched shortly after onBeforeRequest on the same wake-up
+  setTimeout(() => {
+    watcher.trackCreatedTab({
+      id: 71,
+      windowId: 10,
+      url: targetUrl,
+      cookieStoreId: "firefox-default",
+    });
+  }, 5);
+
+  assert.deepEqual(await pending, { cancel: true });
+  assert.deepEqual(detected, [{ tabId: 71, url: targetUrl }]);
+  assert.equal(watcher.hasCandidateTab(71), false);
+
+  watcher.destroy();
+});

@@ -499,3 +499,157 @@ test("picker client in-tab mode with target URL opens selected container or Defa
   });
   assert.equal(unsafeClient.targetUrl, null);
 });
+
+test("picker client keeps the in-tab picker (and its target URL) open when tab creation fails, then allows retry", async () => {
+  const target = "https://example.com/invite?code=xyz";
+  const created = [];
+  const removed = [];
+  const errors = [];
+  let failNext = true;
+  const announcer = createAnnouncerSpy();
+  const client = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      runtime: { async sendMessage() { return { ok: true }; } },
+      tabs: {
+        async getCurrent() {
+          return { id: 40, windowId: 10, index: 2 };
+        },
+        async create(props) {
+          if (failNext) {
+            failNext = false;
+            throw new Error("No such container");
+          }
+          created.push(props);
+          return { id: 41 };
+        },
+        async remove(id) {
+          removed.push(id);
+        },
+      },
+    },
+    win: {
+      location: { search: `?mode=tab&url=${encodeURIComponent(target)}` },
+      close() {
+        throw new Error("picker must not close");
+      },
+    },
+    announcer,
+    onError: (message) => errors.push(message),
+  });
+
+  await client.pickContainer("firefox-container-9", "Deleted");
+  assert.deepEqual(removed, []);
+  assert.equal(client.isSettled(), false);
+  assert.equal(errors.length, 1);
+  assert.ok(
+    announcer.calls.some(([kind, text]) => kind === "immediate" && text === errors[0])
+  );
+
+  // Retry with another container succeeds and only then removes the picker tab
+  await client.pickContainer("firefox-container-1", "Personal");
+  assert.deepEqual(created, [
+    {
+      windowId: 10,
+      index: 2,
+      url: target,
+      cookieStoreId: "firefox-container-1",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(removed, [40]);
+  assert.equal(client.isSettled(), true);
+});
+
+test("picker client keeps the in-tab picker open when Escape replacement fails", async () => {
+  const removed = [];
+  const errors = [];
+  const client = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      tabs: {
+        async getCurrent() {
+          return { id: 42, windowId: 10, index: 0 };
+        },
+        async create() {
+          throw new Error("create failed");
+        },
+        async remove(id) {
+          removed.push(id);
+        },
+      },
+    },
+    win: { location: { search: "?mode=tab" } },
+    announcer: createAnnouncerSpy(),
+    onError: (message) => errors.push(message),
+  });
+
+  await client.cancelEscape();
+  assert.deepEqual(removed, []);
+  assert.equal(client.isSettled(), false);
+  assert.equal(errors.length, 1);
+});
+
+test("picker client keeps the toolbar popup open when tab creation fails", async () => {
+  let closed = 0;
+  const errors = [];
+  const client = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      tabs: {
+        async create() {
+          throw new Error("create failed");
+        },
+      },
+    },
+    win: {
+      location: { search: "" },
+      close: () => {
+        closed += 1;
+      },
+    },
+    announcer: createAnnouncerSpy(),
+    onError: (message) => errors.push(message),
+  });
+
+  await client.pickContainer("firefox-container-1", "Personal");
+  assert.equal(closed, 0);
+  assert.equal(client.isSettled(), false);
+  assert.equal(errors.length, 1);
+});
+
+test("picker client opens settings without closing the in-tab picker while an external link is pending", async () => {
+  const target = "https://example.com/pending";
+  const removed = [];
+  let openedOptions = 0;
+  const client = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      runtime: {
+        async openOptionsPage() {
+          openedOptions += 1;
+        },
+      },
+      tabs: {
+        async getCurrent() {
+          return { id: 43, windowId: 10, index: 0 };
+        },
+        async remove(id) {
+          removed.push(id);
+        },
+      },
+    },
+    win: {
+      location: { search: `?mode=tab&url=${encodeURIComponent(target)}` },
+      close() {
+        throw new Error("picker must not close");
+      },
+    },
+    announcer: createAnnouncerSpy(),
+  });
+
+  await client.openSettings();
+  assert.equal(openedOptions, 1);
+  assert.deepEqual(removed, []);
+  assert.equal(client.isSettled(), false);
+});
