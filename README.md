@@ -14,7 +14,7 @@ Firefox already provides a way to always ask for a container while opening a new
 
 <img src="assets/default%20firefox%20behavior.png" width="200" />
 
-This extension provides a way to use a shortcut of your own OR override the default cmd+T shortcut.
+But there is no option to always choose a container using a keyboard shortcut or even override the `cmd+t` keyboard shortcut. This extension solves that need.
 
 ## Highlights
 
