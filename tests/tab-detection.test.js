@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyTabUrl,
+  getEffectiveTabUrl,
   shouldIgnoreCreatedTab,
   shouldTriggerForWindow,
 } from "../src/lib/tab-detection.js";
@@ -49,6 +50,34 @@ test("shouldIgnoreCreatedTab enforces all ignore guards", () => {
     shouldIgnoreCreatedTab({ ...normalNewTab, id: 99 }, baseContext),
     true
   );
+});
+
+test("getEffectiveTabUrl prefers non-empty pendingUrl over about:blank/current url", () => {
+  assert.equal(getEffectiveTabUrl({ url: "about:newtab" }), "about:newtab");
+  assert.equal(getEffectiveTabUrl({ url: "about:blank" }), "about:blank");
+  assert.equal(
+    getEffectiveTabUrl({
+      url: "about:blank",
+      pendingUrl: "https://example.com",
+    }),
+    "https://example.com"
+  );
+  assert.equal(
+    getEffectiveTabUrl({
+      url: "about:newtab",
+      pendingUrl: "https://example.com",
+    }),
+    "https://example.com"
+  );
+  assert.equal(
+    getEffectiveTabUrl({ url: "about:blank", pendingUrl: "about:newtab" }),
+    "about:newtab"
+  );
+  assert.equal(
+    getEffectiveTabUrl({ url: "https://example.com", pendingUrl: "" }),
+    "https://example.com"
+  );
+  assert.equal(getEffectiveTabUrl(null), undefined);
 });
 
 test("classifyTabUrl classifies about:newtab, pending, and other URLs", () => {

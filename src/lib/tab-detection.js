@@ -35,6 +35,24 @@ export function shouldIgnoreCreatedTab(tab, context = {}) {
 }
 
 /**
+ * Return the tab's pending navigation URL when present, otherwise its current URL.
+ * Prevents an initial "about:blank" URL from shadowing a real pendingUrl.
+ * @param {object | null | undefined} tab
+ * @returns {unknown}
+ */
+export function getEffectiveTabUrl(tab) {
+  if (!tab || typeof tab !== "object") {
+    return undefined;
+  }
+
+  if (typeof tab.pendingUrl === "string" && tab.pendingUrl.length > 0) {
+    return tab.pendingUrl;
+  }
+
+  return tab.url;
+}
+
+/**
  * Classify a tab URL into "newtab", "pending", or "other".
  * @param {unknown} url
  * @returns {"newtab" | "pending" | "other"}

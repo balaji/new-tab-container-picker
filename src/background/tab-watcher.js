@@ -1,7 +1,11 @@
-import { classifyTabUrl, shouldIgnoreCreatedTab } from "../lib/tab-detection.js";
+import {
+  classifyTabUrl,
+  getEffectiveTabUrl,
+  shouldIgnoreCreatedTab,
+} from "../lib/tab-detection.js";
 import { isOwnPickerUrl } from "./browser-actions.js";
 
-export const DEFAULT_PENDING_TIMEOUT_MS = 180;
+export const DEFAULT_PENDING_TIMEOUT_MS = 500;
 export const DEFAULT_IGNORED_TAB_TTL_MS = 5000;
 
 /**
@@ -66,18 +70,24 @@ export function createTabWatcher(browserApi, deps = {}) {
     ignoredTimers.set(tabId, timerId);
   }
 
+  function isOwnTab(tab) {
+    return (
+      isOwnPickerUrl(browserApi.runtime, tab?.url) ||
+      isOwnPickerUrl(browserApi.runtime, tab?.pendingUrl)
+    );
+  }
+
   /**
    * Inspect a newly created tab and trigger immediately or wait for URL resolution.
    * @param {object} tab
    * @returns {Promise<void>}
    */
   async function handleTabCreated(tab) {
-    const rawUrl = tab?.url || tab?.pendingUrl;
-    if (isOwnPickerUrl(browserApi.runtime, rawUrl) || shouldIgnore(tab)) {
+    if (isOwnTab(tab) || shouldIgnore(tab)) {
       return;
     }
 
-    const urlKind = classifyTabUrl(rawUrl);
+    const urlKind = classifyTabUrl(getEffectiveTabUrl(tab));
     if (urlKind === "other") {
       return;
     }
@@ -87,7 +97,9 @@ export function createTabWatcher(browserApi, deps = {}) {
       return;
     }
 
-    // urlKind === "pending": wait briefly for Firefox's about:blank -> about:newtab transition
+    // urlKind === "pending": wait briefly for Firefox's about:blank -> about:newtab transition.
+    // Never trigger while the tab remains about:blank, because external app links, Customize
+    // Toolbar, and slow navigations all start (or stay) at about:blank.
     clearPending(tab.id);
     const timerId = setTimeout(async () => {
       if (!pendingTabs.has(tab.id)) {
@@ -102,19 +114,12 @@ export function createTabWatcher(browserApi, deps = {}) {
         return;
       }
 
-      const freshRawUrl = freshTab?.url || freshTab?.pendingUrl;
-      if (
-        isOwnPickerUrl(browserApi.runtime, freshRawUrl) ||
-        shouldIgnore(freshTab)
-      ) {
+      if (isOwnTab(freshTab) || shouldIgnore(freshTab)) {
         return;
       }
 
-      const freshKind = classifyTabUrl(freshRawUrl);
-      if (
-        freshTab.active &&
-        (freshKind === "newtab" || freshKind === "pending")
-      ) {
+      const freshKind = classifyTabUrl(getEffectiveTabUrl(freshTab));
+      if (freshTab.active && freshKind === "newtab") {
         await onNewTabDetected(freshTab);
       }
     }, pendingTimeoutMs);
@@ -136,8 +141,14 @@ export function createTabWatcher(browserApi, deps = {}) {
 
     if (
       isOwnPickerUrl(browserApi.runtime, changeInfo?.url) ||
-      isOwnPickerUrl(browserApi.runtime, updatedTab?.url)
+      isOwnTab(updatedTab)
     ) {
+      clearPending(tabId);
+      return;
+    }
+
+    const effectiveKind = classifyTabUrl(getEffectiveTabUrl(updatedTab));
+    if (effectiveKind === "other") {
       clearPending(tabId);
       return;
     }
@@ -157,16 +168,9 @@ export function createTabWatcher(browserApi, deps = {}) {
       }
     }
 
-    if (changeInfo?.status === "complete") {
-      const currentKind = classifyTabUrl(
-        updatedTab?.url || updatedTab?.pendingUrl
-      );
+    if (changeInfo?.status === "complete" && effectiveKind === "newtab") {
       clearPending(tabId);
-      if (
-        currentKind === "pending" &&
-        updatedTab?.active &&
-        !shouldIgnore(updatedTab)
-      ) {
+      if (updatedTab?.active && !shouldIgnore(updatedTab)) {
         await onNewTabDetected(updatedTab);
       }
     }

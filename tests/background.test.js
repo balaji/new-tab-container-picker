@@ -406,7 +406,7 @@ test("1. Default openOnNewTab=false leaves about:newtab untouched; openOnNewTab=
   controller.destroy();
 });
 
-test("2. about:blank transitions to about:newtab vs navigating to real URL", async () => {
+test("2. about:blank transitions to about:newtab trigger picker, while external links and Customize Toolbar are never hijacked", async () => {
   const mock = createMockBrowser({
     localStorage: { openOnNewTab: true },
   });
@@ -415,13 +415,51 @@ test("2. about:blank transitions to about:newtab vs navigating to real URL", asy
   });
   await controller.ensureInitialized();
 
-  const realTab = await mock.simulateNewTab({ url: "about:blank" });
+  // Fast external link: about:blank -> https://example.com
+  const fastExternalTab = await mock.simulateNewTab({ url: "about:blank" });
   assert.equal(mock.createdTabsLog.length, 0);
-  await mock.simulateTabUpdate(realTab.id, { url: "https://example.com" });
+  await mock.simulateTabUpdate(fastExternalTab.id, { url: "https://example.com" });
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(fastExternalTab.id), true);
 
+  // Slow external app link: stays about:blank past pendingTimeoutMs before redirecting/committing
+  const slowExternalTab = await mock.simulateNewTab({
+    url: "about:blank",
+    status: "loading",
+  });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(slowExternalTab.id), true);
+  await mock.simulateTabUpdate(slowExternalTab.id, {
+    url: "https://docs.example.com/landing",
+    status: "complete",
+  });
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(slowExternalTab.id), true);
+
+  // External link with pendingUrl already set alongside about:blank
+  const pendingUrlTab = await mock.simulateNewTab({
+    url: "about:blank",
+    pendingUrl: "https://external.example.org",
+  });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(pendingUrlTab.id), true);
+
+  // Firefox "Customize Toolbar" tab: remains about:blank and fires status=complete
+  const customizeTab = await mock.simulateNewTab({
+    url: "about:blank",
+    title: "Customize Firefox",
+  });
+  await mock.simulateTabUpdate(customizeTab.id, { status: "complete" });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(customizeTab.id), true);
+
+  // Real Cmd+T new tab: about:blank (even after initial complete) -> about:newtab
   const blankToNewTab = await mock.simulateNewTab({ url: "about:blank" });
+  await mock.simulateTabUpdate(blankToNewTab.id, { status: "complete" });
   assert.equal(mock.createdTabsLog.length, 0);
   await mock.simulateTabUpdate(blankToNewTab.id, { url: "about:newtab" });
   assert.equal(mock.createdTabsLog.length, 1);
@@ -429,6 +467,7 @@ test("2. about:blank transitions to about:newtab vs navigating to real URL", asy
     mock.createdTabsLog[0].props.url,
     "moz-extension://test-uuid/src/picker/picker.html?mode=tab"
   );
+  assert.equal(mock.tabsMap.has(blankToNewTab.id), false);
 
   controller.destroy();
 });
