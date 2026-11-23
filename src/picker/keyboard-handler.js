@@ -4,6 +4,7 @@
  *   doc: Document,
  *   searchInput: HTMLInputElement,
  *   settingsBtn?: HTMLElement | null,
+ *   toggleBtn?: HTMLElement | null,
  *   focusSearchInput: () => void,
  *   getItemCount: () => number,
  *   onMove?: (delta: number) => void,
@@ -17,6 +18,7 @@ export function createKeyboardHandler({
   doc,
   searchInput,
   settingsBtn,
+  toggleBtn,
   focusSearchInput,
   getItemCount,
   onMove,
@@ -31,8 +33,9 @@ export function createKeyboardHandler({
       return;
     }
 
-    const isSettingsFocused = Boolean(
-      settingsBtn && doc.activeElement === settingsBtn
+    // Footer buttons (settings, on/off switch) handle Enter/Space natively.
+    const isSettingsFocused = [settingsBtn, toggleBtn].some(
+      (el) => Boolean(el) && doc.activeElement === el
     );
     if (isSettingsFocused && (event.key === "Enter" || event.key === " ")) {
       return;

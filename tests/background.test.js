@@ -571,6 +571,29 @@ test("4. Tabs created with openerTabId (Default/Escape replacement) are ignored 
   controller.destroy();
 });
 
+test("4b. Toolbar popup choosing Default announces its own new tab, which is not replaced by the in-tab picker", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true },
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const response = await mock.browser.runtime.sendMessage({
+    type: "expect-own-new-tab",
+  });
+  assert.deepEqual(response, { ok: true });
+
+  const ownTab = await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.tabsMap.has(ownTab.id), true);
+
+  // The expectation is consumed once; a later user Cmd+T is still intercepted.
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 1);
+
+  controller.destroy();
+});
+
 test("5. Containers disabled/empty, single-tab windows, incognito, pinned, and container tabs never trigger picker", async () => {
   const mock = createMockBrowser({
     localStorage: { openOnNewTab: true },
@@ -615,6 +638,38 @@ test("6. Turning openOnNewTab off stops new-tab interception immediately", async
 
   await mock.simulateNewTab({ url: "about:newtab" });
   assert.equal(mock.createdTabsLog.length, 0);
+
+  controller.destroy();
+});
+
+test("6b. Global on/off switch suspends interception, keeps preferences, and shows an OFF badge", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true, extensionEnabled: false },
+  });
+  const badgeLog = [];
+  mock.browser.action = {
+    async setBadgeText(details) {
+      badgeLog.push(details.text);
+    },
+    async setBadgeBackgroundColor() {},
+  };
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  assert.equal(controller.isExtensionEnabled(), false);
+  assert.equal(controller.isNewTabModeEnabled(), false);
+  assert.equal(badgeLog.at(-1), "OFF");
+  await mock.simulateNewTab({ url: "about:newtab" });
+  assert.equal(mock.createdTabsLog.length, 0);
+
+  await mock.browser.storage.local.set({ extensionEnabled: true });
+  assert.equal(controller.isExtensionEnabled(), true);
+  assert.equal(controller.isNewTabModeEnabled(), true);
+  assert.equal(controller.getSettings().openOnNewTab, true);
+  assert.equal(badgeLog.at(-1), "");
+
+  await mock.simulateNewTab({ url: "about:newtab", index: 1 });
+  assert.equal(mock.createdTabsLog.length, 1);
 
   controller.destroy();
 });

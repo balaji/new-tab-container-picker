@@ -247,6 +247,7 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
     openOnNewTab: false,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
+    extensionEnabled: true,
     shortcut: "Ctrl+Shift+Y",
   });
   ctrlA.destroy();

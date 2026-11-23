@@ -134,6 +134,12 @@ test("picker client toolbar popup mode creates tabs at end of strip, enforces se
   const clientB = createPickerClient({
     browserApi: {
       contextualIdentities: { query: async () => [] },
+      runtime: {
+        async sendMessage(message) {
+          createdTabsB.push({ message });
+          return { ok: true };
+        },
+      },
       tabs: {
         async create(props) {
           createdTabsB.push(props);
@@ -151,7 +157,11 @@ test("picker client toolbar popup mode creates tabs at end of strip, enforces se
   });
 
   await clientB.pickContainer("firefox-default", "Default");
-  assert.deepEqual(createdTabsB, [{ active: true }]);
+  // Default popup pick tells the background to skip its own new tab before creating it
+  assert.deepEqual(createdTabsB, [
+    { message: { type: "expect-own-new-tab" } },
+    { active: true },
+  ]);
   assert.equal(closedB, 1);
 
   let closedEscape = 0;

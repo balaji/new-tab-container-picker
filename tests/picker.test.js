@@ -109,6 +109,10 @@ function createFakeDom(search = "") {
   announcerEl.id = "status-announcer";
   const settingsBtn = new FakeElement("button");
   settingsBtn.id = "open-settings";
+  const toggleBtn = new FakeElement("button");
+  toggleBtn.id = "extension-toggle";
+  const toggleLabel = new FakeElement("span");
+  toggleLabel.id = "extension-toggle-label";
   const targetUrlBanner = new FakeElement("div");
   targetUrlBanner.id = "target-url-banner";
   targetUrlBanner.hidden = true;
@@ -124,6 +128,8 @@ function createFakeDom(search = "") {
     ["empty-state", emptyStateEl],
     ["status-announcer", announcerEl],
     ["open-settings", settingsBtn],
+    ["extension-toggle", toggleBtn],
+    ["extension-toggle-label", toggleLabel],
     ["target-url-banner", targetUrlBanner],
     ["target-url-text", targetUrlText],
     ["picker-error", errorEl],
@@ -206,7 +212,18 @@ function createFakeDom(search = "") {
     },
   };
 
-  return { doc, win, searchInput, listEl, emptyStateEl, announcerEl, settingsBtn, errorEl };
+  return {
+    doc,
+    win,
+    searchInput,
+    listEl,
+    emptyStateEl,
+    announcerEl,
+    settingsBtn,
+    toggleBtn,
+    toggleLabel,
+    errorEl,
+  };
 }
 
 const SAMPLE_IDENTITIES = [
@@ -341,6 +358,47 @@ test("picker highlights first container initially, puts Default last, navigates,
   assert.equal(win.closed, true);
 
   controller.destroy();
+});
+
+test("on/off switch reflects stored state, persists toggles, and ignores Enter for container picking", async () => {
+  const { doc, win, toggleBtn, toggleLabel } = createFakeDom();
+  const { browserApi, createdTabs } = createTestPickerApi();
+  const store = { extensionEnabled: false };
+  const writes = [];
+  const storageListeners = [];
+  browserApi.storage.local.get = async () => ({ ...store });
+  browserApi.storage.local.set = async (obj) => {
+    writes.push(obj);
+    Object.assign(store, obj);
+  };
+  browserApi.storage.onChanged = {
+    addListener: (fn) => storageListeners.push(fn),
+    removeListener: (fn) => storageListeners.splice(storageListeners.indexOf(fn), 1),
+  };
+
+  const controller = await createPickerController({ browserApi, doc, win });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(controller.getState().extensionEnabled, false);
+  assert.equal(toggleBtn.getAttribute("aria-checked"), "false");
+  assert.equal(toggleLabel.textContent, "Off");
+
+  toggleBtn.dispatchEvent({ type: "click" });
+  await Promise.resolve();
+  assert.deepEqual(writes, [{ extensionEnabled: true }]);
+  assert.equal(toggleBtn.getAttribute("aria-checked"), "true");
+  assert.equal(toggleLabel.textContent, "On");
+
+  toggleBtn.focus();
+  doc.dispatchKeyDown("Enter");
+  await Promise.resolve();
+  assert.equal(createdTabs.length, 0);
+
+  storageListeners[0]({ extensionEnabled: { newValue: false } }, "local");
+  assert.equal(toggleLabel.textContent, "Off");
+
+  controller.destroy();
+  assert.equal(storageListeners.length, 0);
 });
 
 test("picker closes on Escape without creating a tab and opens Default tab on click", async () => {

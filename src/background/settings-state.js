@@ -1,6 +1,7 @@
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_EXTENSION_ENABLED,
   STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
@@ -14,6 +15,7 @@ export function createSettingsState(browserApi) {
   let openOnNewTab = DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB];
   let openOnExternalLink = DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK];
   let autoOpenSingleMatch = DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
+  let extensionEnabled = DEFAULT_SETTINGS[STORAGE_KEY_EXTENSION_ENABLED];
 
   /**
    * Load persisted settings from local storage.
@@ -24,6 +26,7 @@ export function createSettingsState(browserApi) {
     openOnNewTab = settings[STORAGE_KEY_OPEN_ON_NEW_TAB];
     openOnExternalLink = settings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK];
     autoOpenSingleMatch = settings[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
+    extensionEnabled = settings[STORAGE_KEY_EXTENSION_ENABLED];
   }
 
   /**
@@ -59,16 +62,28 @@ export function createSettingsState(browserApi) {
           ? next
           : DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
     }
+
+    if (STORAGE_KEY_EXTENSION_ENABLED in changes) {
+      const next = changes[STORAGE_KEY_EXTENSION_ENABLED]?.newValue;
+      extensionEnabled =
+        typeof next === "boolean"
+          ? next
+          : DEFAULT_SETTINGS[STORAGE_KEY_EXTENSION_ENABLED];
+    }
   }
 
   return {
     init,
-    isNewTabModeEnabled: () => openOnNewTab,
-    isExternalLinkModeEnabled: () => openOnExternalLink,
+    isExtensionEnabled: () => extensionEnabled,
+    // The global on/off switch suspends all automatic interception while
+    // keeping the individual preferences intact for when it is turned back on.
+    isNewTabModeEnabled: () => extensionEnabled && openOnNewTab,
+    isExternalLinkModeEnabled: () => extensionEnabled && openOnExternalLink,
     getSettings: () => ({
       openOnNewTab,
       openOnExternalLink,
       autoOpenSingleMatch,
+      extensionEnabled,
     }),
     handleStorageChanged,
   };

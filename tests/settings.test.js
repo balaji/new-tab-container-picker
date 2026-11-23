@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_EXTENSION_ENABLED,
   STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
@@ -18,6 +19,7 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
     openOnNewTab: false,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
+    extensionEnabled: true,
   });
 
   assert.deepEqual(
@@ -39,6 +41,7 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
       openOnNewTab: true,
       openOnExternalLink: true,
       autoOpenSingleMatch: true,
+      extensionEnabled: true,
     }
   );
 });
@@ -61,11 +64,13 @@ test("loadSettings reads storage keys safely and falls back to defaults on error
     openOnNewTab: true,
     openOnExternalLink: true,
     autoOpenSingleMatch: true,
+    extensionEnabled: true,
   });
   assert.deepEqual(requestedKeys, [
     STORAGE_KEY_OPEN_ON_NEW_TAB,
     STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
     STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+    STORAGE_KEY_EXTENSION_ENABLED,
   ]);
 
   const emptyStorage = {

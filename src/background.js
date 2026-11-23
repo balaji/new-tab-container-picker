@@ -8,6 +8,7 @@ import {
   getAvailableContainers,
 } from "./lib/containers.js";
 import {
+  STORAGE_KEY_EXTENSION_ENABLED,
   STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   saveSettings,
@@ -414,6 +415,47 @@ export function createBackgroundController(browserApi, options = {}) {
     }
   }
 
+  /**
+   * Reflect the global on/off switch on the toolbar icon with an "OFF" badge.
+   */
+  async function updateActionBadge() {
+    const action = browserApi.action;
+    if (typeof action?.setBadgeText !== "function") {
+      return;
+    }
+    const enabled = settingsState.isExtensionEnabled();
+    try {
+      if (!enabled && typeof action.setBadgeBackgroundColor === "function") {
+        await action.setBadgeBackgroundColor({ color: "#5b5b66" });
+      }
+      if (!enabled && typeof action.setBadgeTextColor === "function") {
+        await action.setBadgeTextColor({ color: "#ffffff" });
+      }
+      await action.setBadgeText({ text: enabled ? "" : "OFF" });
+    } catch {
+      // Badge updates are cosmetic; ignore failures
+    }
+  }
+
+  async function verifyTabsPermission() {
+    if (
+      !settingsState.isNewTabModeEnabled() ||
+      typeof browserApi.permissions?.contains !== "function"
+    ) {
+      return;
+    }
+    try {
+      const hasTabs = await browserApi.permissions.contains({
+        permissions: ["tabs"],
+      });
+      if (!hasTabs) {
+        await handleTabsPermissionRevoked();
+      }
+    } catch {
+      // Ignore permission inspection failures
+    }
+  }
+
   async function ensureSettingsReady() {
     if (settingsReady) {
       return;
@@ -422,6 +464,7 @@ export function createBackgroundController(browserApi, options = {}) {
       settingsInitPromise = (async () => {
         await settingsState.init();
         settingsReady = true;
+        await updateActionBadge();
       })();
     }
 
@@ -440,23 +483,11 @@ export function createBackgroundController(browserApi, options = {}) {
       initPromise = (async () => {
         await ensureSettingsReady();
 
-        const postTasks = [closedSessionCleaner.purge()];
-
-        if (
-          settingsState.isNewTabModeEnabled() &&
-          typeof browserApi.permissions?.contains === "function"
-        ) {
-          postTasks.push(
-            browserApi.permissions
-              .contains({ permissions: ["tabs"] })
-              .then((hasTabs) =>
-                hasTabs ? undefined : handleTabsPermissionRevoked()
-              )
-              .catch(() => {})
-          );
-        }
-
-        postTasks.push(verifyExternalLinkPermissions());
+        const postTasks = [
+          closedSessionCleaner.purge(),
+          verifyTabsPermission(),
+          verifyExternalLinkPermissions(),
+        ];
         await Promise.all(postTasks);
         initialized = true;
       })();
@@ -492,6 +523,10 @@ export function createBackgroundController(browserApi, options = {}) {
         message.url,
         message.cookieStoreId
       );
+      return Promise.resolve({ ok: true });
+    }
+    if (message?.type === "expect-own-new-tab") {
+      tabWatcher.expectOwnNewTab();
       return Promise.resolve({ ok: true });
     }
     return undefined;
@@ -573,7 +608,12 @@ export function createBackgroundController(browserApi, options = {}) {
       }
       await ensureSettingsReady();
       settingsState.handleStorageChanged(changes, areaName);
-      if (STORAGE_KEY_OPEN_ON_EXTERNAL_LINK in changes) {
+      const extensionToggled = STORAGE_KEY_EXTENSION_ENABLED in changes;
+      if (extensionToggled) {
+        await updateActionBadge();
+        await verifyTabsPermission();
+      }
+      if (extensionToggled || STORAGE_KEY_OPEN_ON_EXTERNAL_LINK in changes) {
         await verifyExternalLinkPermissions();
       }
     });
@@ -589,6 +629,7 @@ export function createBackgroundController(browserApi, options = {}) {
     ensureInitialized,
     isNewTabModeEnabled: () => settingsState.isNewTabModeEnabled(),
     isExternalLinkModeEnabled: () => settingsState.isExternalLinkModeEnabled(),
+    isExtensionEnabled: () => settingsState.isExtensionEnabled(),
     getSettings: () => settingsState.getSettings(),
     destroy() {
       for (const timerId of scheduledTimers) {

@@ -1,23 +1,26 @@
 export const STORAGE_KEY_OPEN_ON_NEW_TAB = "openOnNewTab";
 export const STORAGE_KEY_OPEN_ON_EXTERNAL_LINK = "openOnExternalLink";
 export const STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH = "autoOpenSingleMatch";
+export const STORAGE_KEY_EXTENSION_ENABLED = "extensionEnabled";
 
 export const DEFAULT_SETTINGS = Object.freeze({
   [STORAGE_KEY_OPEN_ON_NEW_TAB]: false,
   [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: false,
   [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: false,
+  [STORAGE_KEY_EXTENSION_ENABLED]: true,
 });
 
 const SETTING_KEYS = [
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_EXTENSION_ENABLED,
 ];
 
 /**
  * Normalize a raw settings record into a validated settings object with defaults.
  * @param {unknown} raw
- * @returns {{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean }}
+ * @returns {{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean, extensionEnabled: boolean }}
  */
 export function normalizeSettings(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
@@ -34,13 +37,17 @@ export function normalizeSettings(raw) {
       typeof source[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH] === "boolean"
         ? source[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]
         : DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH],
+    [STORAGE_KEY_EXTENSION_ENABLED]:
+      typeof source[STORAGE_KEY_EXTENSION_ENABLED] === "boolean"
+        ? source[STORAGE_KEY_EXTENSION_ENABLED]
+        : DEFAULT_SETTINGS[STORAGE_KEY_EXTENSION_ENABLED],
   };
 }
 
 /**
  * Load extension settings from a WebExtension storage area, falling back to defaults.
  * @param {{ get?: (keys: string[]) => Promise<Record<string, unknown>> } | undefined} storageArea
- * @returns {Promise<{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean }>}
+ * @returns {Promise<{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean, extensionEnabled: boolean }>}
  */
 export async function loadSettings(storageArea) {
   if (typeof storageArea?.get !== "function") {

@@ -30,12 +30,14 @@ test("init loads openOnNewTab, openOnExternalLink, and autoOpenSingleMatch from 
     openOnNewTab: false,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
+    extensionEnabled: true,
   });
 
   const enabledMock = createMockBrowserForSettings({
     openOnNewTab: true,
     openOnExternalLink: true,
     autoOpenSingleMatch: true,
+    extensionEnabled: true,
   });
   const enabledState = createSettingsState(enabledMock.api);
   await enabledState.init();
@@ -45,6 +47,7 @@ test("init loads openOnNewTab, openOnExternalLink, and autoOpenSingleMatch from 
     openOnNewTab: true,
     openOnExternalLink: true,
     autoOpenSingleMatch: true,
+    extensionEnabled: true,
   });
 });
 
@@ -53,6 +56,7 @@ test("handleStorageChanged guards non-local areas and normalizes invalid values"
     openOnNewTab: true,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
+    extensionEnabled: true,
   });
   const state = createSettingsState(mock.api);
   await state.init();
@@ -77,6 +81,7 @@ test("handleStorageChanged guards non-local areas and normalizes invalid values"
     openOnNewTab: false,
     openOnExternalLink: true,
     autoOpenSingleMatch: true,
+    extensionEnabled: true,
   });
   assert.equal(state.isNewTabModeEnabled(), false);
   assert.equal(state.isExternalLinkModeEnabled(), true);
@@ -93,5 +98,27 @@ test("handleStorageChanged guards non-local areas and normalizes invalid values"
     openOnNewTab: false,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
+    extensionEnabled: true,
   });
+});
+
+test("extensionEnabled=false suspends interception modes without losing stored preferences", async () => {
+  const mock = createMockBrowserForSettings({
+    openOnNewTab: true,
+    openOnExternalLink: true,
+    extensionEnabled: false,
+  });
+  const state = createSettingsState(mock.api);
+  await state.init();
+  assert.equal(state.isExtensionEnabled(), false);
+  assert.equal(state.isNewTabModeEnabled(), false);
+  assert.equal(state.isExternalLinkModeEnabled(), false);
+  assert.equal(state.getSettings().openOnNewTab, true);
+
+  state.handleStorageChanged({ extensionEnabled: { newValue: true } }, "local");
+  assert.equal(state.isNewTabModeEnabled(), true);
+  assert.equal(state.isExternalLinkModeEnabled(), true);
+
+  state.handleStorageChanged({ extensionEnabled: { newValue: "nope" } }, "local");
+  assert.equal(state.isExtensionEnabled(), true);
 });

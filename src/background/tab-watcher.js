@@ -7,6 +7,7 @@ import { isOwnPickerUrl } from "./browser-actions.js";
 
 export const DEFAULT_PENDING_TIMEOUT_MS = 500;
 export const DEFAULT_IGNORED_TAB_TTL_MS = 5000;
+export const DEFAULT_EXPECTED_OWN_TAB_TTL_MS = 2000;
 
 /**
  * Track newly created tabs, resolve pending about:blank transitions, and ignore self-created tabs.
@@ -27,6 +28,7 @@ export function createTabWatcher(browserApi, deps = {}) {
   const pendingTabs = new Map();
   const ignoredTabIds = new Set();
   const ignoredTimers = new Map();
+  let expectedOwnTabUntil = 0;
 
   function shouldIgnore(tab) {
     return shouldIgnoreCreatedTab(tab, {
@@ -70,6 +72,28 @@ export function createTabWatcher(browserApi, deps = {}) {
     ignoredTimers.set(tabId, timerId);
   }
 
+  /**
+   * Expect the next newly created new-tab page to be opened by the extension itself
+   * (e.g. the toolbar popup choosing Default), so it must not re-trigger the picker.
+   * @param {number} [ttlMs]
+   */
+  function expectOwnNewTab(ttlMs = DEFAULT_EXPECTED_OWN_TAB_TTL_MS) {
+    expectedOwnTabUntil = Date.now() + ttlMs;
+  }
+
+  function consumeExpectedOwnTab(tab) {
+    if (expectedOwnTabUntil === 0) {
+      return false;
+    }
+    const active = Date.now() <= expectedOwnTabUntil;
+    expectedOwnTabUntil = 0;
+    if (active && typeof tab?.id === "number") {
+      ignoreTab(tab.id);
+      return true;
+    }
+    return false;
+  }
+
   function isOwnTab(tab) {
     return (
       isOwnPickerUrl(browserApi.runtime, tab?.url) ||
@@ -89,6 +113,10 @@ export function createTabWatcher(browserApi, deps = {}) {
 
     const urlKind = classifyTabUrl(getEffectiveTabUrl(tab));
     if (urlKind === "other") {
+      return;
+    }
+
+    if (consumeExpectedOwnTab(tab)) {
       return;
     }
 
@@ -196,10 +224,12 @@ export function createTabWatcher(browserApi, deps = {}) {
       clearIgnored(tabId);
     }
     ignoredTabIds.clear();
+    expectedOwnTabUntil = 0;
   }
 
   return {
     ignoreTab,
+    expectOwnNewTab,
     isTabIgnored: (tabId) => ignoredTabIds.has(tabId),
     hasPendingTab: (tabId) => pendingTabs.has(tabId),
     handleTabCreated,

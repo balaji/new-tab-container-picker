@@ -86,6 +86,21 @@ export function createPickerClient({
     }
   }
 
+  /**
+   * Tell the background that the next Default new tab is ours, so the optional
+   * new-tab interception does not replace it with the in-tab picker.
+   */
+  async function expectOwnNewTab() {
+    if (typeof browserApi?.runtime?.sendMessage !== "function") {
+      return;
+    }
+    try {
+      await browserApi.runtime.sendMessage({ type: "expect-own-new-tab" });
+    } catch {
+      // Proceed even if messaging is unavailable
+    }
+  }
+
   async function replaceCurrentPickerTab(createTabProps) {
     let currentTab = null;
     try {
@@ -222,6 +237,11 @@ export function createPickerClient({
 
     if (targetUrl) {
       await allowTargetUrlNavigation(createProps.cookieStoreId);
+    } else if (
+      !createProps.cookieStoreId &&
+      typeof browserApi?.runtime?.sendMessage === "function"
+    ) {
+      await expectOwnNewTab();
     }
 
     try {

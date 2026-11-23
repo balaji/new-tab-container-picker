@@ -1,4 +1,9 @@
 import { filterContainers, getNextIndex } from "../lib/filter.js";
+import {
+  STORAGE_KEY_EXTENSION_ENABLED,
+  loadSettings,
+  saveSettings,
+} from "../lib/settings.js";
 import { createStatusAnnouncer } from "./announcer.js";
 import { createKeyboardHandler } from "./keyboard-handler.js";
 import { createListRenderer } from "./list-renderer.js";
@@ -27,6 +32,8 @@ export async function createPickerController(deps = {}) {
   const emptyStateEl = doc.getElementById("empty-state");
   const announcerEl = doc.getElementById("status-announcer");
   const settingsBtn = doc.getElementById("open-settings");
+  const toggleBtn = doc.getElementById("extension-toggle");
+  const toggleLabel = doc.getElementById("extension-toggle-label");
   const targetUrlBanner = doc.getElementById("target-url-banner");
   const targetUrlText = doc.getElementById("target-url-text");
   const errorEl = doc.getElementById("picker-error");
@@ -39,6 +46,7 @@ export async function createPickerController(deps = {}) {
   let isComposing = false;
   let focusTimerId = null;
   let destroyed = false;
+  let extensionEnabled = true;
 
   const announcer = createStatusAnnouncer(announcerEl);
 
@@ -61,6 +69,48 @@ export async function createPickerController(deps = {}) {
     }
     errorEl.textContent = message ?? "";
     errorEl.hidden = !message;
+  }
+
+  function renderExtensionToggle() {
+    if (!toggleBtn) {
+      return;
+    }
+    toggleBtn.setAttribute?.("aria-checked", String(extensionEnabled));
+    toggleBtn.setAttribute?.(
+      "title",
+      extensionEnabled ? "Turn the extension off" : "Turn the extension on"
+    );
+    if (toggleLabel) {
+      toggleLabel.textContent = extensionEnabled ? "On" : "Off";
+    }
+  }
+
+  async function handleToggleClick() {
+    extensionEnabled = !extensionEnabled;
+    renderExtensionToggle();
+    announcer.announceImmediate(
+      extensionEnabled ? "Extension turned on" : "Extension turned off"
+    );
+    try {
+      await saveSettings(browserApi?.storage?.local, {
+        [STORAGE_KEY_EXTENSION_ENABLED]: extensionEnabled,
+      });
+    } catch {
+      extensionEnabled = !extensionEnabled;
+      renderExtensionToggle();
+      setErrorMessage("Couldn\u2019t save the on/off setting. Try again.");
+    }
+  }
+
+  function handleStorageChanged(changes, areaName) {
+    if (areaName !== "local" || !changes) {
+      return;
+    }
+    if (STORAGE_KEY_EXTENSION_ENABLED in changes) {
+      const next = changes[STORAGE_KEY_EXTENSION_ENABLED]?.newValue;
+      extensionEnabled = typeof next === "boolean" ? next : true;
+      renderExtensionToggle();
+    }
   }
 
   const client = createPickerClient({
@@ -157,6 +207,7 @@ export async function createPickerController(deps = {}) {
     doc,
     searchInput,
     settingsBtn,
+    toggleBtn,
     focusSearchInput,
     getItemCount: () => filteredContainers.length,
     onMove(delta) {
@@ -179,6 +230,8 @@ export async function createPickerController(deps = {}) {
   searchInput.addEventListener("compositionstart", handleCompositionStart);
   searchInput.addEventListener("compositionend", handleCompositionEnd);
   settingsBtn?.addEventListener("click", client.openSettings);
+  toggleBtn?.addEventListener("click", handleToggleClick);
+  browserApi?.storage?.onChanged?.addListener?.(handleStorageChanged);
   doc.addEventListener("keydown", handleKeyDown);
   win.addEventListener("focus", focusSearchInput);
 
@@ -198,7 +251,10 @@ export async function createPickerController(deps = {}) {
 
   focusTimerId = scheduleTimeout(() => {
     focusTimerId = null;
-    if (doc.activeElement !== settingsBtn) {
+    if (
+      doc.activeElement !== settingsBtn &&
+      (!toggleBtn || doc.activeElement !== toggleBtn)
+    ) {
       focusSearchInput();
     }
   }, FOCUS_FALLBACK_DELAY_MS);
@@ -214,8 +270,19 @@ export async function createPickerController(deps = {}) {
     searchInput.removeEventListener("compositionstart", handleCompositionStart);
     searchInput.removeEventListener("compositionend", handleCompositionEnd);
     settingsBtn?.removeEventListener("click", client.openSettings);
+    toggleBtn?.removeEventListener("click", handleToggleClick);
+    browserApi?.storage?.onChanged?.removeListener?.(handleStorageChanged);
     doc.removeEventListener("keydown", handleKeyDown);
     win.removeEventListener("focus", focusSearchInput);
+  }
+
+  if (toggleBtn) {
+    loadSettings(browserApi?.storage?.local).then((settings) => {
+      if (!destroyed) {
+        extensionEnabled = settings[STORAGE_KEY_EXTENSION_ENABLED] !== false;
+        renderExtensionToggle();
+      }
+    });
   }
 
   const loaded = await client.loadState();
@@ -278,6 +345,7 @@ export async function createPickerController(deps = {}) {
       activeIndex,
       autoOpenSingleMatch,
       unavailableReason,
+      extensionEnabled,
     }),
     destroy: cleanup,
   };
