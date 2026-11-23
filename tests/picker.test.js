@@ -109,6 +109,14 @@ function createFakeDom(search = "") {
   announcerEl.id = "status-announcer";
   const settingsBtn = new FakeElement("button");
   settingsBtn.id = "open-settings";
+  const targetUrlBanner = new FakeElement("div");
+  targetUrlBanner.id = "target-url-banner";
+  targetUrlBanner.hidden = true;
+  const targetUrlText = new FakeElement("span");
+  targetUrlText.id = "target-url-text";
+  const errorEl = new FakeElement("p");
+  errorEl.id = "picker-error";
+  errorEl.hidden = true;
 
   const elementsById = new Map([
     ["container-search", searchInput],
@@ -116,6 +124,9 @@ function createFakeDom(search = "") {
     ["empty-state", emptyStateEl],
     ["status-announcer", announcerEl],
     ["open-settings", settingsBtn],
+    ["target-url-banner", targetUrlBanner],
+    ["target-url-text", targetUrlText],
+    ["picker-error", errorEl],
   ]);
 
   const docListeners = new Map();
@@ -195,7 +206,7 @@ function createFakeDom(search = "") {
     },
   };
 
-  return { doc, win, searchInput, listEl, emptyStateEl, announcerEl, settingsBtn };
+  return { doc, win, searchInput, listEl, emptyStateEl, announcerEl, settingsBtn, errorEl };
 }
 
 const SAMPLE_IDENTITIES = [
@@ -698,4 +709,105 @@ test("picker in-tab mode (?mode=tab) sets data-mode=tab, replaces current tab on
   assert.equal(apiC.getOpenOptionsCalls(), 1);
   assert.deepEqual(removedC, [60]);
   ctrlC.destroy();
+
+  // In-tab mode with target URL displays banner, updates title, and opens URL in chosen container
+  const targetUrl = "https://docs.example.com/guide?ref=slack";
+  const createdD = [];
+  const removedD = [];
+  const domD = createFakeDom(
+    `?mode=tab&url=${encodeURIComponent(targetUrl)}`
+  );
+  const apiD = createTestPickerApi();
+  apiD.browserApi.tabs = {
+    async getCurrent() {
+      return { id: 70, windowId: 10, index: 3 };
+    },
+    async create(props) {
+      createdD.push(props);
+      return { id: 71, ...props };
+    },
+    async remove(id) {
+      removedD.push(id);
+    },
+  };
+
+  const ctrlD = await createPickerController({
+    browserApi: apiD.browserApi,
+    doc: domD.doc,
+    win: domD.win,
+  });
+  const banner = domD.doc.getElementById("target-url-banner");
+  const bannerText = domD.doc.getElementById("target-url-text");
+  assert.equal(banner.hidden, false);
+  assert.equal(banner.getAttribute("title"), targetUrl);
+  assert.equal(bannerText.textContent, targetUrl);
+  assert.equal(domD.doc.title, "Open docs.example.com in Container");
+
+  domD.doc.dispatchKeyDown("Enter");
+  await flushMicrotasks();
+  assert.deepEqual(createdD, [
+    {
+      windowId: 10,
+      index: 3,
+      url: targetUrl,
+      cookieStoreId: "firefox-container-1",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(removedD, [70]);
+  ctrlD.destroy();
+});
+
+test("picker shows a visible error and stays usable when opening the tab fails", async () => {
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 8; i += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  const target = "https://example.com/external";
+  const dom = createFakeDom(`?mode=tab&url=${encodeURIComponent(target)}`);
+  const api = createTestPickerApi();
+  const created = [];
+  const removed = [];
+  let failNext = true;
+  api.browserApi.runtime.sendMessage = async () => ({ ok: true });
+  api.browserApi.tabs = {
+    async getCurrent() {
+      return { id: 50, windowId: 10, index: 1 };
+    },
+    async create(props) {
+      if (failNext) {
+        failNext = false;
+        throw new Error("container removed");
+      }
+      created.push(props);
+      return { id: 51, ...props };
+    },
+    async remove(id) {
+      removed.push(id);
+    },
+  };
+
+  const ctrl = await createPickerController({
+    browserApi: api.browserApi,
+    doc: dom.doc,
+    win: dom.win,
+  });
+
+  dom.doc.dispatchKeyDown("Enter");
+  await flushMicrotasks();
+  assert.deepEqual(removed, []);
+  assert.equal(dom.errorEl.hidden, false);
+  assert.match(dom.errorEl.textContent, /Couldn.t open the tab/);
+
+  // Retrying clears the error and completes normally
+  dom.doc.dispatchKeyDown("Enter");
+  await flushMicrotasks();
+  assert.equal(dom.errorEl.hidden, true);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].url, target);
+  assert.deepEqual(removed, [50]);
+
+  ctrl.destroy();
 });

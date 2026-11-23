@@ -66,11 +66,13 @@ function createMockBrowser(initial = {}) {
   const grantedPermissions = new Set(
     initial.permissions ?? ["tabs", "sessions"]
   );
+  const grantedOrigins = new Set(initial.origins ?? []);
   const recentlyClosed = (initial.recentlyClosed ?? []).map((entry) =>
     structuredClone(entry)
   );
 
   const createdTabsLog = [];
+  const updatedTabsLog = [];
   const removedTabsLog = [];
   const forgottenWindowsLog = [];
   const forgottenTabsLog = [];
@@ -87,6 +89,22 @@ function createMockBrowser(initial = {}) {
   const storageOnChanged = createEventEmitter();
   const runtimeOnInstalled = createEventEmitter();
   const runtimeOnStartup = createEventEmitter();
+  const runtimeOnMessage = createEventEmitter();
+  const webRequestListeners = new Map();
+
+  const webRequestApi = {
+    onBeforeRequest: {
+      addListener(fn, filter, extraInfoSpec) {
+        webRequestListeners.set(fn, { filter, extraInfoSpec });
+      },
+      removeListener(fn) {
+        webRequestListeners.delete(fn);
+      },
+      hasListener(fn) {
+        return webRequestListeners.has(fn);
+      },
+    },
+  };
 
   let containersMode = initial.containersMode ?? "enabled";
   const containersList = initial.containers ?? [
@@ -167,6 +185,14 @@ function createMockBrowser(initial = {}) {
         tabsMap.set(id, tab);
         createdTabsLog.push({ props: { ...props }, tab: { ...tab } });
         await tabsOnCreated.emit({ ...tab });
+        return { ...tab };
+      },
+      async update(tabId, props) {
+        const tab = tabsMap.get(tabId);
+        if (!tab) throw new Error(`No tab ${tabId}`);
+        Object.assign(tab, props);
+        updatedTabsLog.push({ tabId, props: { ...props }, tab: { ...tab } });
+        await tabsOnUpdated.emit(tabId, { ...props }, { ...tab });
         return { ...tab };
       },
       async remove(tabId) {
@@ -281,8 +307,11 @@ function createMockBrowser(initial = {}) {
     permissions: {
       onAdded: permissionsOnAdded,
       onRemoved: permissionsOnRemoved,
-      async contains({ permissions = [] } = {}) {
-        return permissions.every((p) => grantedPermissions.has(p));
+      async contains({ permissions = [], origins = [] } = {}) {
+        return (
+          permissions.every((p) => grantedPermissions.has(p)) &&
+          origins.every((o) => grantedOrigins.has(o))
+        );
       },
     },
     commands: {
@@ -297,6 +326,11 @@ function createMockBrowser(initial = {}) {
     runtime: {
       onInstalled: runtimeOnInstalled,
       onStartup: runtimeOnStartup,
+      onMessage: runtimeOnMessage,
+      async sendMessage(message) {
+        const results = await runtimeOnMessage.emit(message);
+        return results[0];
+      },
       getURL(path) {
         return `moz-extension://test-uuid/${path}`;
       },
@@ -306,6 +340,9 @@ function createMockBrowser(initial = {}) {
   if (!initial.omitSessions) {
     browser.sessions = sessionsApi;
   }
+  if (!initial.omitWebRequest) {
+    browser.webRequest = webRequestApi;
+  }
 
   return {
     browser,
@@ -313,25 +350,39 @@ function createMockBrowser(initial = {}) {
     windowsMap,
     localStore,
     createdTabsLog,
+    updatedTabsLog,
     removedTabsLog,
     recentlyClosed,
     forgottenWindowsLog,
     forgottenTabsLog,
     commandsUpdateLog,
+    webRequestListeners,
     getCommandShortcut: () => commandShortcut,
     setContainersMode(mode) {
       containersMode = mode;
     },
-    async grantPermissions(perms) {
+    async grantPermissions(perms, origins = []) {
       for (const p of perms) grantedPermissions.add(p);
+      for (const o of origins) grantedOrigins.add(o);
       if (perms.includes("sessions")) {
         browser.sessions = sessionsApi;
       }
-      await permissionsOnAdded.emit({ permissions: perms });
+      if (perms.includes("webRequest")) {
+        browser.webRequest = webRequestApi;
+      }
+      await permissionsOnAdded.emit({ permissions: perms, origins });
     },
-    async revokePermissions(perms) {
+    async revokePermissions(perms, origins = []) {
       for (const p of perms) grantedPermissions.delete(p);
-      await permissionsOnRemoved.emit({ permissions: perms });
+      for (const o of origins) grantedOrigins.delete(o);
+      await permissionsOnRemoved.emit({ permissions: perms, origins });
+    },
+    async simulateBeforeRequest(details) {
+      const results = [];
+      for (const fn of [...webRequestListeners.keys()]) {
+        results.push(await fn(details));
+      }
+      return results;
     },
     async simulateNewTab(overrides = {}) {
       const id = nextTabId++;
@@ -673,6 +724,350 @@ test("8. Initialization sweeps pre-existing closed picker tabs and windows witho
     { windowId: 10, sessionId: "late-picker-tab" },
   ]);
   assert.equal(mock.recentlyClosed.length, 2);
+
+  controller.destroy();
+});
+
+test("9. Opt-in openOnExternalLink intercepts external links before loading, opens picker with target URL, and ignores Customize Toolbar, page links, and Default replacements", async () => {
+  const mock = createMockBrowser({
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  // Disabled by default: webRequest listener is NOT attached
+  assert.equal(controller.isExternalLinkModeEnabled(), false);
+  assert.equal(mock.webRequestListeners.size, 0);
+
+  // Enable opt-in setting -> attaches blocking webRequest listener
+  await mock.browser.storage.local.set({ openOnExternalLink: true });
+  assert.equal(controller.isExternalLinkModeEnabled(), true);
+  assert.equal(mock.webRequestListeners.size, 1);
+
+  // External app opens a link -> starts about:blank, then main_frame GET request fires
+  const externalTab = await mock.simulateNewTab({ url: "about:blank" });
+  const targetUrl = "https://auth.example.com/magic?token=one-time";
+  const responses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(responses, [{ cancel: true }]);
+
+  // Next tick navigates that exact tab to picker.html?mode=tab&url=...
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.updatedTabsLog.length, 1);
+  assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
+  assert.equal(
+    mock.updatedTabsLog[0].props.url,
+    `moz-extension://test-uuid/src/picker/picker.html?mode=tab&url=${encodeURIComponent(targetUrl)}`
+  );
+
+  // User picks Default (or presses Escape): tab created with openerTabId is NOT re-intercepted
+  const defaultReopen = await mock.browser.tabs.create({
+    windowId: 10,
+    index: externalTab.index,
+    url: targetUrl,
+    active: true,
+    openerTabId: externalTab.id,
+  });
+  const reopenResponses = await mock.simulateBeforeRequest({
+    tabId: defaultReopen.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(reopenResponses, [{}]);
+
+  // Customize Toolbar stays about:blank and is never touched
+  const customizeTab = await mock.simulateNewTab({
+    url: "about:blank",
+    title: "Customize Firefox",
+  });
+  await mock.simulateTabUpdate(customizeTab.id, { status: "complete" });
+  assert.equal(mock.tabsMap.get(customizeTab.id).url, "about:blank");
+
+  // Normal Cmd+T (with openOnNewTab=false) followed by typing a URL is NOT intercepted
+  const normalNewTab = await mock.simulateNewTab({ url: "about:blank" });
+  await mock.simulateTabUpdate(normalNewTab.id, { url: "about:newtab" });
+  const typedRes = await mock.simulateBeforeRequest({
+    tabId: normalNewTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: "https://mozilla.org/",
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(typedRes, [{}]);
+
+  // Second external link opened while a container tab is active (Firefox inherits container)
+  const inheritedContainerTab = await mock.simulateNewTab({
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+    index: 3,
+  });
+  const secondUrl = "https://github.com/supernormalco/supermono/pull/2994";
+  const secondResponses = await mock.simulateBeforeRequest({
+    tabId: inheritedContainerTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: secondUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(secondResponses, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  // Picker opens in Default container at the same index and closes the placeholder container tab
+  const createdPickerForSecond = mock.createdTabsLog.at(-1);
+  assert.equal(
+    createdPickerForSecond.props.url,
+    `moz-extension://test-uuid/src/picker/picker.html?mode=tab&url=${encodeURIComponent(secondUrl)}`
+  );
+  assert.equal(createdPickerForSecond.props.index, 3);
+  assert.equal(createdPickerForSecond.tab.cookieStoreId, "firefox-default");
+  assert.equal(mock.tabsMap.has(inheritedContainerTab.id), false);
+
+  // Picker notifies background before creating chosen container tab -> allowed without looping
+  await mock.browser.runtime.sendMessage({
+    type: "allow-external-url",
+    url: secondUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  const chosenContainerTab = await mock.browser.tabs.create({
+    windowId: 10,
+    index: 3,
+    url: secondUrl,
+    cookieStoreId: "firefox-container-2",
+    active: true,
+  });
+  const chosenResponses = await mock.simulateBeforeRequest({
+    tabId: chosenContainerTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: secondUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(chosenResponses, [{}]);
+
+  // Disabling openOnExternalLink detaches webRequest listener immediately
+  await mock.browser.storage.local.set({ openOnExternalLink: false });
+  assert.equal(controller.isExternalLinkModeEnabled(), false);
+  assert.equal(mock.webRequestListeners.size, 0);
+
+  controller.destroy();
+});
+
+test("10. openOnExternalLink disables cleanly when webRequest or origin permissions are missing or revoked", async () => {
+  // Startup with stored openOnExternalLink=true but missing origins -> disables automatically
+  const startupMock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions"],
+    origins: [],
+    omitWebRequest: true,
+  });
+  const startupCtrl = createBackgroundController(startupMock.browser);
+  await startupCtrl.ensureInitialized();
+  assert.equal(startupCtrl.isExternalLinkModeEnabled(), false);
+  assert.equal(startupMock.localStore.openOnExternalLink, false);
+  assert.equal(startupMock.webRequestListeners.size, 0);
+  startupCtrl.destroy();
+
+  // Revoking host origins at runtime disables openOnExternalLink and detaches listener
+  const revokeMock = createMockBrowser({
+    localStorage: { openOnExternalLink: true, openOnNewTab: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const revokeCtrl = createBackgroundController(revokeMock.browser);
+  await revokeCtrl.ensureInitialized();
+  assert.equal(revokeCtrl.isExternalLinkModeEnabled(), true);
+  assert.equal(revokeMock.webRequestListeners.size, 1);
+
+  await revokeMock.revokePermissions([], ["https://*/*"]);
+  assert.equal(revokeCtrl.isExternalLinkModeEnabled(), false);
+  assert.equal(revokeMock.localStore.openOnExternalLink, false);
+  assert.equal(revokeMock.webRequestListeners.size, 0);
+  // openOnNewTab remains unaffected when only host origins are revoked
+  assert.equal(revokeCtrl.isNewTabModeEnabled(), true);
+
+  revokeCtrl.destroy();
+});
+
+test("11. webRequest listener attaches synchronously at startup for MV3 wake-up and intercepts even when onBeforeRequest beats tabs.onCreated or sessions purge is slow", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+
+  // Make sessions.getRecentlyClosed hang until released to verify onBeforeRequest does not block on it
+  let releaseSessions;
+  mock.browser.sessions.getRecentlyClosed = () =>
+    new Promise((resolve) => {
+      releaseSessions = () => resolve([]);
+    });
+
+  // Listener MUST be attached synchronously right inside createBackgroundController (before any await)
+  const controller = createBackgroundController(mock.browser);
+  assert.equal(mock.webRequestListeners.size, 1);
+
+  // Cold wake-up: external link fires BEFORE ensureInitialized() / sessions purge completes
+  const coldTabId = 500;
+  mock.tabsMap.set(coldTabId, {
+    id: coldTabId,
+    windowId: 10,
+    index: 1,
+    url: "about:blank",
+    cookieStoreId: "firefox-default",
+    active: true,
+    incognito: false,
+    pinned: false,
+  });
+  const coldUrl = "https://slack.example.com/cold-wake";
+  const coldRes = await mock.simulateBeforeRequest({
+    tabId: coldTabId,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: coldUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(coldRes, [{ cancel: true }]);
+
+  // Release sessions purge and finish initialization
+  releaseSessions();
+  await controller.ensureInitialized();
+
+  // Warm race: onBeforeRequest arrives BEFORE tabs.onCreated for a brand-new about:blank tab
+  const warmRaceTabId = 501;
+  mock.tabsMap.set(warmRaceTabId, {
+    id: warmRaceTabId,
+    windowId: 10,
+    index: 2,
+    url: "about:blank",
+    cookieStoreId: "firefox-default",
+    active: true,
+    incognito: false,
+    pinned: false,
+  });
+  const warmUrl = "https://github.com/org/repo/issues/42";
+  const warmRes = await mock.simulateBeforeRequest({
+    tabId: warmRaceTabId,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: warmUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(warmRes, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.updatedTabsLog.length, 2);
+  assert.equal(mock.updatedTabsLog[0].tabId, coldTabId);
+  assert.equal(
+    mock.updatedTabsLog[0].props.url,
+    `moz-extension://test-uuid/src/picker/picker.html?mode=tab&url=${encodeURIComponent(coldUrl)}`
+  );
+  assert.equal(mock.updatedTabsLog[1].tabId, warmRaceTabId);
+  assert.equal(
+    mock.updatedTabsLog[1].props.url,
+    `moz-extension://test-uuid/src/picker/picker.html?mode=tab&url=${encodeURIComponent(warmUrl)}`
+  );
+
+  controller.destroy();
+});
+
+test("12. If the picker cannot be shown after cancelling an external link, the original URL is restored instead of lost", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  // Navigating to the picker page fails (e.g. tab is in a transient state)
+  const originalUpdate = mock.browser.tabs.update;
+  mock.browser.tabs.update = async (tabId, props) => {
+    if (String(props.url).startsWith("moz-extension://")) {
+      throw new Error("Cannot navigate to picker");
+    }
+    return originalUpdate(tabId, props);
+  };
+
+  const externalTab = await mock.simulateNewTab({ url: "about:blank" });
+  const targetUrl = "https://docs.example.com/shared/doc-1";
+  const responses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(responses, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.updatedTabsLog.length, 1);
+  assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
+  assert.equal(mock.updatedTabsLog[0].props.url, targetUrl);
+
+  // The restored navigation is allowed through rather than intercepted again
+  const restoredResponses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-default",
+  });
+  assert.deepEqual(restoredResponses, [{}]);
+
+  controller.destroy();
+});
+
+test("13. Container-inherited external link restores the URL in its original tab when the picker tab cannot be created", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const externalTab = await mock.simulateNewTab({
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+  });
+
+  mock.browser.tabs.create = async () => {
+    throw new Error("Cannot create picker tab");
+  };
+
+  const targetUrl = "https://jira.example.com/browse/ABC-1";
+  const responses = await mock.simulateBeforeRequest({
+    tabId: externalTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(responses, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(mock.removedTabsLog, []);
+  assert.equal(mock.updatedTabsLog.length, 1);
+  assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
+  assert.equal(mock.updatedTabsLog[0].props.url, targetUrl);
 
   controller.destroy();
 });

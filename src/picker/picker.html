@@ -9,6 +9,18 @@
 </head>
 <body>
   <main class="picker">
+    <div id="target-url-banner" class="target-url-banner" hidden>
+      <svg class="target-url-icon" aria-hidden="true" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M6.75 9.25L9.25 6.75M6 10.75L4.75 12C3.78 12.97 2.22 12.97 1.25 12C0.28 11.03 0.28 9.47 1.25 8.5L2.5 7.25M10 5.25L11.25 4C12.22 3.03 13.78 3.03 14.75 4C15.72 4.97 15.72 6.53 14.75 7.5L13.5 8.75"
+          stroke="currentColor"
+          stroke-width="1.35"
+          stroke-linecap="round"
+        />
+      </svg>
+      <span id="target-url-text" class="target-url-text"></span>
+    </div>
+
     <header class="search-header">
       <label for="container-search" class="visually-hidden">Search containers</label>
       <div class="search-field">
@@ -41,6 +53,8 @@
       ></ul>
       <p id="empty-state" class="empty-state" hidden>No matching containers</p>
     </div>
+
+    <p id="picker-error" class="picker-error" hidden></p>
 
     <div
       id="status-announcer"

@@ -53,6 +53,27 @@ export function getEffectiveTabUrl(tab) {
 }
 
 /**
+ * Validate and normalize an HTTP(S) URL string, returning null for non-HTTP(S) or invalid values.
+ * @param {unknown} rawUrl
+ * @returns {string | null}
+ */
+export function parseHttpUrl(rawUrl) {
+  if (typeof rawUrl !== "string" || rawUrl.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Classify a tab URL into "newtab", "pending", or "other".
  * @param {unknown} url
  * @returns {"newtab" | "pending" | "other"}

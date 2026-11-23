@@ -1,6 +1,7 @@
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
   saveSettings,
@@ -17,6 +18,25 @@ import {
 
 const DEFAULT_STATUS_DURATION_MS = 1800;
 export const NEWTAB_OPTIONAL_PERMISSIONS = Object.freeze(["tabs", "sessions"]);
+export const EXTERNAL_LINK_OPTIONAL_PERMISSIONS = Object.freeze([
+  "tabs",
+  "sessions",
+  "webRequest",
+  "webRequestBlocking",
+]);
+export const EXTERNAL_LINK_REQUIRED_PERMISSIONS = Object.freeze([
+  "tabs",
+  "webRequest",
+  "webRequestBlocking",
+]);
+export const EXTERNAL_LINK_REVOCABLE_PERMISSIONS = Object.freeze([
+  "webRequest",
+  "webRequestBlocking",
+]);
+export const EXTERNAL_LINK_OPTIONAL_ORIGINS = Object.freeze([
+  "http://*/*",
+  "https://*/*",
+]);
 
 /**
  * Initialize and control the extension options page UI.
@@ -41,6 +61,9 @@ export async function createOptionsController(deps = {}) {
   const statusDurationMs = deps.statusDurationMs ?? DEFAULT_STATUS_DURATION_MS;
 
   const openOnNewTabInput = doc.getElementById("setting-open-on-new-tab");
+  const openOnExternalLinkInput = doc.getElementById(
+    "setting-open-on-external-link"
+  );
   const autoOpenInput = doc.getElementById("setting-auto-open");
   const shortcutInput = doc.getElementById("setting-shortcut");
   const resetShortcutBtn = doc.getElementById("shortcut-reset");
@@ -49,6 +72,7 @@ export async function createOptionsController(deps = {}) {
 
   const checkboxBindings = [
     { key: STORAGE_KEY_OPEN_ON_NEW_TAB, input: openOnNewTabInput },
+    { key: STORAGE_KEY_OPEN_ON_EXTERNAL_LINK, input: openOnExternalLinkInput },
     { key: STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH, input: autoOpenInput },
   ];
 
@@ -166,6 +190,60 @@ export async function createOptionsController(deps = {}) {
       openOnNewTabInput,
       nextValue
     );
+  }
+
+  async function handleOpenOnExternalLinkChange() {
+    const nextValue = Boolean(openOnExternalLinkInput.checked);
+
+    // Request optional permissions synchronously before any await to preserve the user gesture.
+    if (nextValue && typeof browserApi?.permissions?.request === "function") {
+      let granted = false;
+      try {
+        granted = Boolean(
+          await browserApi.permissions.request({
+            permissions: [...EXTERNAL_LINK_OPTIONAL_PERMISSIONS],
+            origins: [...EXTERNAL_LINK_OPTIONAL_ORIGINS],
+          })
+        );
+      } catch {
+        granted = false;
+      }
+      if (destroyed) {
+        return;
+      }
+      if (!granted) {
+        openOnExternalLinkInput.checked = Boolean(
+          currentSettings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]
+        );
+        showStatus("Permission is required to intercept external links", true);
+        return;
+      }
+    }
+
+    await saveBooleanSetting(
+      STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
+      openOnExternalLinkInput,
+      nextValue
+    );
+
+    if (
+      !nextValue &&
+      !destroyed &&
+      currentSettings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK] === false &&
+      typeof browserApi?.permissions?.remove === "function"
+    ) {
+      const permissionsToRemove = currentSettings[STORAGE_KEY_OPEN_ON_NEW_TAB]
+        ? [...EXTERNAL_LINK_REVOCABLE_PERMISSIONS]
+        : [...EXTERNAL_LINK_OPTIONAL_PERMISSIONS];
+      try {
+        await browserApi.permissions.remove({
+          permissions: permissionsToRemove,
+          origins: [...EXTERNAL_LINK_OPTIONAL_ORIGINS],
+        });
+      } catch {
+        // Setting is already disabled even if permission removal fails
+      }
+    }
   }
 
   function handleAutoOpenChange() {
@@ -368,11 +446,35 @@ export async function createOptionsController(deps = {}) {
     }
   }
 
+  if (
+    currentSettings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK] === true &&
+    typeof browserApi?.permissions?.contains === "function"
+  ) {
+    try {
+      const granted = await browserApi.permissions.contains({
+        permissions: [...EXTERNAL_LINK_REQUIRED_PERMISSIONS],
+        origins: [...EXTERNAL_LINK_OPTIONAL_ORIGINS],
+      });
+      if (!granted) {
+        currentSettings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK] = false;
+        await saveSettings(browserApi?.storage?.local, {
+          [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: false,
+        }).catch(() => {});
+      }
+    } catch {
+      // Ignore permission check failures
+    }
+  }
+
   syncCheckboxes();
   syncShortcutInput();
 
   if (!destroyed) {
     openOnNewTabInput?.addEventListener("change", handleOpenOnNewTabChange);
+    openOnExternalLinkInput?.addEventListener(
+      "change",
+      handleOpenOnExternalLinkChange
+    );
     autoOpenInput?.addEventListener("change", handleAutoOpenChange);
     shortcutInput?.addEventListener("focus", startRecording);
     shortcutInput?.addEventListener("click", startRecording);
@@ -395,6 +497,10 @@ export async function createOptionsController(deps = {}) {
       openOnNewTabInput?.removeEventListener(
         "change",
         handleOpenOnNewTabChange
+      );
+      openOnExternalLinkInput?.removeEventListener(
+        "change",
+        handleOpenOnExternalLinkChange
       );
       autoOpenInput?.removeEventListener("change", handleAutoOpenChange);
       shortcutInput?.removeEventListener("focus", startRecording);

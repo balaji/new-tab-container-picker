@@ -27,6 +27,9 @@ export async function createPickerController(deps = {}) {
   const emptyStateEl = doc.getElementById("empty-state");
   const announcerEl = doc.getElementById("status-announcer");
   const settingsBtn = doc.getElementById("open-settings");
+  const targetUrlBanner = doc.getElementById("target-url-banner");
+  const targetUrlText = doc.getElementById("target-url-text");
+  const errorEl = doc.getElementById("picker-error");
 
   let allContainers = [];
   let filteredContainers = [];
@@ -52,6 +55,14 @@ export async function createPickerController(deps = {}) {
     }
   }
 
+  function setErrorMessage(message) {
+    if (!errorEl) {
+      return;
+    }
+    errorEl.textContent = message ?? "";
+    errorEl.hidden = !message;
+  }
+
   const client = createPickerClient({
     browserApi,
     win,
@@ -60,13 +71,36 @@ export async function createPickerController(deps = {}) {
       searchInput.value = "";
       applyFilter();
     },
+    onError: (message) => {
+      setErrorMessage(message);
+      focusSearchInput();
+    },
   });
 
   if (client.isInTabMode) {
     doc.documentElement?.setAttribute?.("data-mode", "tab");
   }
 
+  if (client.targetUrl) {
+    if (targetUrlBanner) {
+      targetUrlBanner.hidden = false;
+      targetUrlBanner.setAttribute?.("title", client.targetUrl);
+    }
+    if (targetUrlText) {
+      targetUrlText.textContent = client.targetUrl;
+    }
+    try {
+      const { host } = new URL(client.targetUrl);
+      if (host) {
+        doc.title = `Open ${host} in Container`;
+      }
+    } catch {
+      // Keep default document title
+    }
+  }
+
   function pickContainer(cookieStoreId) {
+    setErrorMessage("");
     const chosen = allContainers.find((c) => c.cookieStoreId === cookieStoreId);
     return client.pickContainer(cookieStoreId, chosen?.name);
   }

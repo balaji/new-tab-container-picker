@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   classifyTabUrl,
   getEffectiveTabUrl,
+  parseHttpUrl,
   shouldIgnoreCreatedTab,
   shouldTriggerForWindow,
 } from "../src/lib/tab-detection.js";
@@ -78,6 +79,22 @@ test("getEffectiveTabUrl prefers non-empty pendingUrl over about:blank/current u
     "https://example.com"
   );
   assert.equal(getEffectiveTabUrl(null), undefined);
+});
+
+test("parseHttpUrl accepts http(s) URLs and rejects unsafe or invalid schemes", () => {
+  assert.equal(
+    parseHttpUrl("https://example.com/path?a=1#top"),
+    "https://example.com/path?a=1#top"
+  );
+  assert.equal(parseHttpUrl("http://localhost:8080/test"), "http://localhost:8080/test");
+  assert.equal(parseHttpUrl("javascript:alert(1)"), null);
+  assert.equal(parseHttpUrl("data:text/html,hi"), null);
+  assert.equal(parseHttpUrl("file:///etc/passwd"), null);
+  assert.equal(parseHttpUrl("about:config"), null);
+  assert.equal(parseHttpUrl("moz-extension://id/page.html"), null);
+  assert.equal(parseHttpUrl(""), null);
+  assert.equal(parseHttpUrl(null), null);
+  assert.equal(parseHttpUrl("not a url"), null);
 });
 
 test("classifyTabUrl classifies about:newtab, pending, and other URLs", () => {

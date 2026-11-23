@@ -13,6 +13,20 @@ export function getPickerUrlPrefix(runtimeApi) {
 }
 
 /**
+ * Build the in-tab picker URL, optionally including an HTTP(S) target URL to open after selection.
+ * @param {{ getURL?: (path: string) => string } | undefined} runtimeApi
+ * @param {string | null | undefined} [targetUrl]
+ * @returns {string}
+ */
+export function buildPickerTabUrl(runtimeApi, targetUrl) {
+  const base = `${getPickerUrlPrefix(runtimeApi)}?mode=tab`;
+  if (typeof targetUrl === "string" && targetUrl.length > 0) {
+    return `${base}&url=${encodeURIComponent(targetUrl)}`;
+  }
+  return base;
+}
+
+/**
  * Determine whether a URL points to this extension's picker page.
  * @param {{ getURL?: (path: string) => string } | undefined} runtimeApi
  * @param {unknown} url

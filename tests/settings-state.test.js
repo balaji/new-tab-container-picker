@@ -20,25 +20,30 @@ function createMockBrowserForSettings(localData = {}) {
   };
 }
 
-test("init loads openOnNewTab and autoOpenSingleMatch from storage.local", async () => {
+test("init loads openOnNewTab, openOnExternalLink, and autoOpenSingleMatch from storage.local", async () => {
   const defaultMock = createMockBrowserForSettings();
   const defaultState = createSettingsState(defaultMock.api);
   await defaultState.init();
   assert.equal(defaultState.isNewTabModeEnabled(), false);
+  assert.equal(defaultState.isExternalLinkModeEnabled(), false);
   assert.deepEqual(defaultState.getSettings(), {
     openOnNewTab: false,
+    openOnExternalLink: false,
     autoOpenSingleMatch: false,
   });
 
   const enabledMock = createMockBrowserForSettings({
     openOnNewTab: true,
+    openOnExternalLink: true,
     autoOpenSingleMatch: true,
   });
   const enabledState = createSettingsState(enabledMock.api);
   await enabledState.init();
   assert.equal(enabledState.isNewTabModeEnabled(), true);
+  assert.equal(enabledState.isExternalLinkModeEnabled(), true);
   assert.deepEqual(enabledState.getSettings(), {
     openOnNewTab: true,
+    openOnExternalLink: true,
     autoOpenSingleMatch: true,
   });
 });
@@ -46,11 +51,13 @@ test("init loads openOnNewTab and autoOpenSingleMatch from storage.local", async
 test("handleStorageChanged guards non-local areas and normalizes invalid values", async () => {
   const mock = createMockBrowserForSettings({
     openOnNewTab: true,
+    openOnExternalLink: false,
     autoOpenSingleMatch: false,
   });
   const state = createSettingsState(mock.api);
   await state.init();
   assert.equal(state.isNewTabModeEnabled(), true);
+  assert.equal(state.isExternalLinkModeEnabled(), false);
 
   state.handleStorageChanged({ openOnNewTab: { newValue: false } }, "sync");
   assert.equal(state.isNewTabModeEnabled(), true);
@@ -61,25 +68,30 @@ test("handleStorageChanged guards non-local areas and normalizes invalid values"
   state.handleStorageChanged(
     {
       openOnNewTab: { newValue: false },
+      openOnExternalLink: { newValue: true },
       autoOpenSingleMatch: { newValue: true },
     },
     "local"
   );
   assert.deepEqual(state.getSettings(), {
     openOnNewTab: false,
+    openOnExternalLink: true,
     autoOpenSingleMatch: true,
   });
   assert.equal(state.isNewTabModeEnabled(), false);
+  assert.equal(state.isExternalLinkModeEnabled(), true);
 
   state.handleStorageChanged(
     {
       openOnNewTab: { newValue: "not-a-bool" },
+      openOnExternalLink: { newValue: "yes" },
       autoOpenSingleMatch: { newValue: 123 },
     },
     "local"
   );
   assert.deepEqual(state.getSettings(), {
     openOnNewTab: false,
+    openOnExternalLink: false,
     autoOpenSingleMatch: false,
   });
 });
