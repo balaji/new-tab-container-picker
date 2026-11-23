@@ -6,6 +6,7 @@ import { getAvailableContainers } from "./lib/containers.js";
 import { STORAGE_KEY_OPEN_ON_NEW_TAB, saveSettings } from "./lib/settings.js";
 import {
   classifyTabUrl,
+  getEffectiveTabUrl,
   shouldTriggerForWindow,
 } from "./lib/tab-detection.js";
 
@@ -59,7 +60,7 @@ export function createBackgroundController(browserApi, options = {}) {
         const freshTab = await browserApi.tabs.get(tab.id);
         if (
           !freshTab ||
-          classifyTabUrl(freshTab.url || freshTab.pendingUrl) === "other"
+          classifyTabUrl(getEffectiveTabUrl(freshTab)) !== "newtab"
         ) {
           return;
         }
@@ -168,8 +169,21 @@ export function createBackgroundController(browserApi, options = {}) {
 
   function registerListeners() {
     browserApi.tabs?.onCreated?.addListener(async (tab) => {
+      const wasInitialized = initialized;
       await ensureInitialized();
-      await tabWatcher.handleTabCreated(tab);
+      let currentTab = tab;
+      if (
+        !wasInitialized &&
+        typeof browserApi.tabs?.get === "function" &&
+        classifyTabUrl(getEffectiveTabUrl(tab)) === "pending"
+      ) {
+        try {
+          currentTab = await browserApi.tabs.get(tab.id);
+        } catch {
+          return;
+        }
+      }
+      await tabWatcher.handleTabCreated(currentTab);
     });
     browserApi.tabs?.onUpdated?.addListener((tabId, changeInfo, updatedTab) =>
       tabWatcher.handleTabUpdated(tabId, changeInfo, updatedTab)

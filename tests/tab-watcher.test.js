@@ -46,12 +46,15 @@ test("handleTabCreated triggers immediately on about:newtab and ignores own pick
   watcher.destroy();
 });
 
-test("pending about:blank tabs resolve via timeout, URL update, or status complete", async () => {
+test("pending about:blank tabs only trigger when they resolve to about:newtab", async () => {
   const tabsById = new Map([
     [10, { id: 10, windowId: 1, url: "about:blank", active: true }],
     [11, { id: 11, windowId: 1, url: "about:blank", active: true }],
     [12, { id: 12, windowId: 1, url: "about:blank", active: true }],
-    [13, { id: 13, windowId: 1, url: "about:blank", active: true }],
+    [13, { id: 13, windowId: 1, url: "about:blank", active: true, title: "Customize Firefox" }],
+    [14, { id: 14, windowId: 1, url: "about:newtab", active: true }],
+    [15, { id: 15, windowId: 1, url: "about:blank", active: true }],
+    [16, { id: 16, windowId: 1, url: "about:blank", active: true }],
   ]);
   const triggered = [];
   const watcher = createTabWatcher(createMockTabBrowser(tabsById), {
@@ -59,11 +62,11 @@ test("pending about:blank tabs resolve via timeout, URL update, or status comple
     onNewTabDetected: (tab) => triggered.push(tab.id),
   });
 
-  // Case 1: timeout resolves while still pending & active -> triggers
+  // Case 1: slow external link stays about:blank past timeout -> never triggers, cleans up
   await watcher.handleTabCreated({ id: 10, windowId: 1, url: "about:blank", active: true });
   assert.equal(watcher.hasPendingTab(10), true);
   await new Promise((r) => setTimeout(r, 40));
-  assert.deepEqual(triggered, [10]);
+  assert.deepEqual(triggered, []);
   assert.equal(watcher.hasPendingTab(10), false);
 
   // Case 2: updates to about:newtab immediately -> triggers once and clears pending
@@ -74,9 +77,9 @@ test("pending about:blank tabs resolve via timeout, URL update, or status comple
     { id: 11, windowId: 1, url: "about:newtab", active: true }
   );
   assert.equal(watcher.hasPendingTab(11), false);
-  assert.deepEqual(triggered, [10, 11]);
+  assert.deepEqual(triggered, [11]);
 
-  // Case 3: updates to external URL -> cancels pending
+  // Case 3: updates to external URL -> cancels pending and does not trigger
   await watcher.handleTabCreated({ id: 12, windowId: 1, url: "about:blank", active: true });
   await watcher.handleTabUpdated(
     12,
@@ -85,15 +88,65 @@ test("pending about:blank tabs resolve via timeout, URL update, or status comple
   );
   assert.equal(watcher.hasPendingTab(12), false);
 
-  // Case 4: completes as active pending URL -> triggers
-  await watcher.handleTabCreated({ id: 13, windowId: 1, url: "about:blank", active: true });
+  // Case 4: Customize Toolbar completes as about:blank -> never triggers
+  await watcher.handleTabCreated({
+    id: 13,
+    windowId: 1,
+    url: "about:blank",
+    active: true,
+    title: "Customize Firefox",
+  });
   await watcher.handleTabUpdated(
     13,
     { status: "complete" },
-    { id: 13, windowId: 1, url: "about:blank", active: true }
+    { id: 13, windowId: 1, url: "about:blank", active: true, title: "Customize Firefox" }
   );
+  await new Promise((r) => setTimeout(r, 40));
   assert.equal(watcher.hasPendingTab(13), false);
-  assert.deepEqual(triggered, [10, 11, 13]);
+  assert.deepEqual(triggered, [11]);
+
+  // Case 5: missed onUpdated where tabs.get shows about:newtab on timeout -> triggers
+  await watcher.handleTabCreated({ id: 14, windowId: 1, url: "about:blank", active: true });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(watcher.hasPendingTab(14), false);
+  assert.deepEqual(triggered, [11, 14]);
+
+  // Case 6: initial about:blank fires status complete before transitioning to about:newtab -> triggers
+  await watcher.handleTabCreated({ id: 15, windowId: 1, url: "about:blank", active: true });
+  await watcher.handleTabUpdated(
+    15,
+    { status: "complete" },
+    { id: 15, windowId: 1, url: "about:blank", active: true }
+  );
+  assert.equal(watcher.hasPendingTab(15), true);
+  await watcher.handleTabUpdated(
+    15,
+    { url: "about:newtab" },
+    { id: 15, windowId: 1, url: "about:newtab", active: true }
+  );
+  assert.equal(watcher.hasPendingTab(15), false);
+  assert.deepEqual(triggered, [11, 14, 15]);
+
+  // Case 7: status complete with url already about:newtab -> triggers
+  await watcher.handleTabCreated({ id: 16, windowId: 1, url: "about:blank", active: true });
+  await watcher.handleTabUpdated(
+    16,
+    { status: "complete" },
+    { id: 16, windowId: 1, url: "about:newtab", active: true }
+  );
+  assert.equal(watcher.hasPendingTab(16), false);
+  assert.deepEqual(triggered, [11, 14, 15, 16]);
+
+  // Case 8: about:blank with external pendingUrl is ignored immediately
+  await watcher.handleTabCreated({
+    id: 17,
+    windowId: 1,
+    url: "about:blank",
+    pendingUrl: "https://example.com",
+    active: true,
+  });
+  assert.equal(watcher.hasPendingTab(17), false);
+  assert.deepEqual(triggered, [11, 14, 15, 16]);
 
   watcher.destroy();
 });
