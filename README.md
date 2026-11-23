@@ -6,11 +6,11 @@ A lightweight **Manifest V3** Firefox extension for opening new tabs in any Fire
 
 Firefox already provides a way to always ask for a container while opening a new tab, but it works only on mouse click, the option in settings is literally called `privacy.userContext.newTabContainerOnLeftClick.enabled`
 
-<center>Firefox settings for Container</center>
+<p align="center"><i>Firefox settings for Container</i></p>
 
 ![](./assets/firefox%20setting.png)
 
-<center>Container picker view on mouse click (Default behaviour)</center>
+<p align="center"><i>Container picker view on mouse click (Default behaviour)</i></p>
 
 ![](./assets/default%20firefox%20behavior.png)
 
@@ -22,15 +22,15 @@ This extension provides a way to use a shortcut of your own OR override the defa
 
 - Instant Keyboard Search & Navigation: Opens focused on the search bar with exact, prefix, substring, and fuzzy matching.
 
-<center>Overrides Cmd+T/Ctrl+T to show container picker</center>
+<p align="center"><i>Overrides Cmd+T/Ctrl+T to show container picker</i></p>
 
 ![](./assets/picker%20in%20new%20tab.png)
 
-<center>Settings page (automatically open the container when there is only one match)</center>
+<p align="center"><i>Settings page (automatically open the container when there is only one match)</i></p>
 
 ![](./assets/settings.png)
 
-<center>Don't override cmd+T, instead use the toolbar icon via custom keyboard shortcut</center>
+<p align="center"><i>Don't override cmd+T, instead use the toolbar icon via custom keyboard shortcut</i></p>
 
 ![](./assets/picker%20via%20toolbar%20icon.png)
 
