@@ -27,6 +27,8 @@ export async function createPickerController(deps = {}) {
   const emptyStateEl = doc.getElementById("empty-state");
   const announcerEl = doc.getElementById("status-announcer");
   const settingsBtn = doc.getElementById("open-settings");
+  const targetUrlBanner = doc.getElementById("target-url-banner");
+  const targetUrlText = doc.getElementById("target-url-text");
 
   let allContainers = [];
   let filteredContainers = [];
@@ -64,6 +66,24 @@ export async function createPickerController(deps = {}) {
 
   if (client.isInTabMode) {
     doc.documentElement?.setAttribute?.("data-mode", "tab");
+  }
+
+  if (client.targetUrl) {
+    if (targetUrlBanner) {
+      targetUrlBanner.hidden = false;
+      targetUrlBanner.setAttribute?.("title", client.targetUrl);
+    }
+    if (targetUrlText) {
+      targetUrlText.textContent = client.targetUrl;
+    }
+    try {
+      const { host } = new URL(client.targetUrl);
+      if (host) {
+        doc.title = `Open ${host} in Container`;
+      }
+    } catch {
+      // Keep default document title
+    }
   }
 
   function pickContainer(cookieStoreId) {

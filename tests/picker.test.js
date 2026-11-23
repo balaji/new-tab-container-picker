@@ -109,6 +109,11 @@ function createFakeDom(search = "") {
   announcerEl.id = "status-announcer";
   const settingsBtn = new FakeElement("button");
   settingsBtn.id = "open-settings";
+  const targetUrlBanner = new FakeElement("div");
+  targetUrlBanner.id = "target-url-banner";
+  targetUrlBanner.hidden = true;
+  const targetUrlText = new FakeElement("span");
+  targetUrlText.id = "target-url-text";
 
   const elementsById = new Map([
     ["container-search", searchInput],
@@ -116,6 +121,8 @@ function createFakeDom(search = "") {
     ["empty-state", emptyStateEl],
     ["status-announcer", announcerEl],
     ["open-settings", settingsBtn],
+    ["target-url-banner", targetUrlBanner],
+    ["target-url-text", targetUrlText],
   ]);
 
   const docListeners = new Map();
@@ -698,4 +705,51 @@ test("picker in-tab mode (?mode=tab) sets data-mode=tab, replaces current tab on
   assert.equal(apiC.getOpenOptionsCalls(), 1);
   assert.deepEqual(removedC, [60]);
   ctrlC.destroy();
+
+  // In-tab mode with target URL displays banner, updates title, and opens URL in chosen container
+  const targetUrl = "https://docs.example.com/guide?ref=slack";
+  const createdD = [];
+  const removedD = [];
+  const domD = createFakeDom(
+    `?mode=tab&url=${encodeURIComponent(targetUrl)}`
+  );
+  const apiD = createTestPickerApi();
+  apiD.browserApi.tabs = {
+    async getCurrent() {
+      return { id: 70, windowId: 10, index: 3 };
+    },
+    async create(props) {
+      createdD.push(props);
+      return { id: 71, ...props };
+    },
+    async remove(id) {
+      removedD.push(id);
+    },
+  };
+
+  const ctrlD = await createPickerController({
+    browserApi: apiD.browserApi,
+    doc: domD.doc,
+    win: domD.win,
+  });
+  const banner = domD.doc.getElementById("target-url-banner");
+  const bannerText = domD.doc.getElementById("target-url-text");
+  assert.equal(banner.hidden, false);
+  assert.equal(banner.getAttribute("title"), targetUrl);
+  assert.equal(bannerText.textContent, targetUrl);
+  assert.equal(domD.doc.title, "Open docs.example.com in Container");
+
+  domD.doc.dispatchKeyDown("Enter");
+  await flushMicrotasks();
+  assert.deepEqual(createdD, [
+    {
+      windowId: 10,
+      index: 3,
+      url: targetUrl,
+      cookieStoreId: "firefox-container-1",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(removedD, [70]);
+  ctrlD.destroy();
 });

@@ -1,20 +1,23 @@
 export const STORAGE_KEY_OPEN_ON_NEW_TAB = "openOnNewTab";
+export const STORAGE_KEY_OPEN_ON_EXTERNAL_LINK = "openOnExternalLink";
 export const STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH = "autoOpenSingleMatch";
 
 export const DEFAULT_SETTINGS = Object.freeze({
   [STORAGE_KEY_OPEN_ON_NEW_TAB]: false,
+  [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: false,
   [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: false,
 });
 
 const SETTING_KEYS = [
   STORAGE_KEY_OPEN_ON_NEW_TAB,
+  STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
 ];
 
 /**
  * Normalize a raw settings record into a validated settings object with defaults.
  * @param {unknown} raw
- * @returns {{ openOnNewTab: boolean, autoOpenSingleMatch: boolean }}
+ * @returns {{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean }}
  */
 export function normalizeSettings(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
@@ -23,6 +26,10 @@ export function normalizeSettings(raw) {
       typeof source[STORAGE_KEY_OPEN_ON_NEW_TAB] === "boolean"
         ? source[STORAGE_KEY_OPEN_ON_NEW_TAB]
         : DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB],
+    [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]:
+      typeof source[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK] === "boolean"
+        ? source[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]
+        : DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK],
     [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]:
       typeof source[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH] === "boolean"
         ? source[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]
@@ -33,7 +40,7 @@ export function normalizeSettings(raw) {
 /**
  * Load extension settings from a WebExtension storage area, falling back to defaults.
  * @param {{ get?: (keys: string[]) => Promise<Record<string, unknown>> } | undefined} storageArea
- * @returns {Promise<{ openOnNewTab: boolean, autoOpenSingleMatch: boolean }>}
+ * @returns {Promise<{ openOnNewTab: boolean, openOnExternalLink: boolean, autoOpenSingleMatch: boolean }>}
  */
 export async function loadSettings(storageArea) {
   if (typeof storageArea?.get !== "function") {

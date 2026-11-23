@@ -352,3 +352,150 @@ test("picker client in-tab mode replaces current picker tab at index, sets opene
   await clientFallback.openSettings();
   assert.equal(fallbackClosed, 1);
 });
+
+test("picker client in-tab mode with target URL opens selected container or Default/Escape at that URL and rejects unsafe URLs", async () => {
+  const target = "https://example.com/auth?code=abc#done";
+  const createdNamed = [];
+  const removedNamed = [];
+  const sentMessages = [];
+  const clientNamed = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      runtime: {
+        async sendMessage(msg) {
+          sentMessages.push(msg);
+          return { ok: true };
+        },
+      },
+      tabs: {
+        async getCurrent() {
+          return { id: 90, windowId: 10, index: 4 };
+        },
+        async create(props) {
+          createdNamed.push(props);
+          return { id: 91 };
+        },
+        async remove(id) {
+          removedNamed.push(id);
+        },
+      },
+    },
+    win: {
+      location: { search: `?mode=tab&url=${encodeURIComponent(target)}` },
+    },
+    announcer: createAnnouncerSpy(),
+  });
+
+  assert.equal(clientNamed.targetUrl, target);
+  await clientNamed.pickContainer("firefox-container-2", "Work");
+  assert.deepEqual(sentMessages, [
+    {
+      type: "allow-external-url",
+      url: target,
+      cookieStoreId: "firefox-container-2",
+    },
+  ]);
+  assert.deepEqual(createdNamed, [
+    {
+      windowId: 10,
+      index: 4,
+      url: target,
+      cookieStoreId: "firefox-container-2",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(removedNamed, [90]);
+
+  // Escape opens target URL in Default container with openerTabId and does NOT send allow-external-url
+  const createdEsc = [];
+  const escSentMessages = [];
+  const clientEsc = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      runtime: {
+        async sendMessage(msg) {
+          escSentMessages.push(msg);
+          return { ok: true };
+        },
+      },
+      tabs: {
+        async getCurrent() {
+          return {
+            id: 92,
+            windowId: 10,
+            index: 2,
+            cookieStoreId: "firefox-default",
+          };
+        },
+        async create(props) {
+          createdEsc.push(props);
+          return { id: 93 };
+        },
+        async remove() {},
+      },
+    },
+    win: {
+      location: { search: `?mode=tab&url=${encodeURIComponent(target)}` },
+    },
+    announcer: createAnnouncerSpy(),
+  });
+  await clientEsc.cancelEscape();
+  assert.deepEqual(escSentMessages, []);
+  assert.deepEqual(createdEsc, [
+    {
+      windowId: 10,
+      index: 2,
+      url: target,
+      openerTabId: 92,
+      active: true,
+    },
+  ]);
+
+  // If picker tab were in a non-default container, Default/Escape omits cross-container openerTabId
+  const createdCross = [];
+  const clientCross = createPickerClient({
+    browserApi: {
+      contextualIdentities: { query: async () => [] },
+      tabs: {
+        async getCurrent() {
+          return {
+            id: 94,
+            windowId: 10,
+            index: 2,
+            cookieStoreId: "firefox-container-2",
+          };
+        },
+        async create(props) {
+          createdCross.push(props);
+          return { id: 95 };
+        },
+        async remove() {},
+      },
+    },
+    win: {
+      location: { search: `?mode=tab&url=${encodeURIComponent(target)}` },
+    },
+    announcer: createAnnouncerSpy(),
+  });
+  await clientCross.cancelEscape();
+  assert.deepEqual(createdCross, [
+    {
+      windowId: 10,
+      index: 2,
+      url: target,
+      active: true,
+    },
+  ]);
+
+  // Unsafe URL schemes are rejected (targetUrl becomes null)
+  const unsafeClient = createPickerClient({
+    browserApi: { contextualIdentities: { query: async () => [] } },
+    win: {
+      location: {
+        search: `?mode=tab&url=${encodeURIComponent("javascript:alert(1)")}`,
+      },
+    },
+    announcer: createAnnouncerSpy(),
+  });
+  assert.equal(unsafeClient.targetUrl, null);
+});

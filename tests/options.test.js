@@ -56,6 +56,9 @@ function createFakeOptionsDom() {
   }
 
   const openOnNewTabInput = new FakeElement("setting-open-on-new-tab");
+  const openOnExternalLinkInput = new FakeElement(
+    "setting-open-on-external-link"
+  );
   const autoOpenInput = new FakeElement("setting-auto-open");
   const shortcutInput = new FakeElement("setting-shortcut");
   const resetBtn = new FakeElement("shortcut-reset");
@@ -68,6 +71,7 @@ function createFakeOptionsDom() {
 
   const byId = new Map([
     ["setting-open-on-new-tab", openOnNewTabInput],
+    ["setting-open-on-external-link", openOnExternalLinkInput],
     ["setting-auto-open", autoOpenInput],
     ["setting-shortcut", shortcutInput],
     ["shortcut-reset", resetBtn],
@@ -102,6 +106,7 @@ function createFakeOptionsDom() {
     win,
     winListeners,
     openOnNewTabInput,
+    openOnExternalLinkInput,
     autoOpenInput,
     shortcutInput,
     resetBtn,
@@ -117,6 +122,7 @@ function createMockOptionsBrowser(initialStore = {}, options = {}) {
   const updateCalls = [];
   const resetCalls = [];
   const permissionRequestCalls = [];
+  const permissionRemoveCalls = [];
   const callOrder = [];
   let hasOptionalPerms = options.hasOptionalPerms ?? true;
 
@@ -174,6 +180,11 @@ function createMockOptionsBrowser(initialStore = {}, options = {}) {
         hasOptionalPerms = true;
         return true;
       },
+      async remove(req) {
+        callOrder.push(["permissions.remove", req]);
+        permissionRemoveCalls.push(req);
+        return true;
+      },
     },
     commands: {
       async getAll() {
@@ -204,6 +215,7 @@ function createMockOptionsBrowser(initialStore = {}, options = {}) {
     updateCalls,
     resetCalls,
     permissionRequestCalls,
+    permissionRemoveCalls,
     callOrder,
     setCommandShortcut(val) {
       commandShortcut = val;
@@ -227,20 +239,26 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
   });
 
   assert.equal(domA.openOnNewTabInput.checked, false);
+  assert.equal(domA.openOnExternalLinkInput.checked, false);
   assert.equal(domA.autoOpenInput.checked, false);
   assert.equal(domA.shortcutInput.disabled, false);
   assert.equal(domA.shortcutInput.value, "Command+Shift+Y");
   assert.deepEqual(ctrlA.getState(), {
     openOnNewTab: false,
+    openOnExternalLink: false,
     autoOpenSingleMatch: false,
     shortcut: "Ctrl+Shift+Y",
   });
   ctrlA.destroy();
 
-  // Stored openOnNewTab=true with permissions keeps shortcut controls enabled alongside toggle
+  // Stored toggles with permissions keep shortcut controls enabled alongside toggles
   const domB = createFakeOptionsDom();
   const mockB = createMockOptionsBrowser(
-    { openOnNewTab: true, autoOpenSingleMatch: true },
+    {
+      openOnNewTab: true,
+      openOnExternalLink: true,
+      autoOpenSingleMatch: true,
+    },
     { shortcut: "Ctrl+Shift+U", hasOptionalPerms: true }
   );
   const ctrlB = await createOptionsController({
@@ -251,6 +269,7 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
   });
 
   assert.equal(domB.openOnNewTabInput.checked, true);
+  assert.equal(domB.openOnExternalLinkInput.checked, true);
   assert.equal(domB.autoOpenInput.checked, true);
   assert.equal(domB.shortcutInput.disabled, false);
   assert.equal(domB.resetBtn.disabled, false);
@@ -258,10 +277,10 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
   assert.equal(domB.shortcutInput.value, "Ctrl+Shift+U");
   ctrlB.destroy();
 
-  // Stored openOnNewTab=true without optional permissions falls back to false
+  // Stored openOnNewTab=true and openOnExternalLink=true without optional permissions fall back to false
   const domC = createFakeOptionsDom();
   const mockC = createMockOptionsBrowser(
-    { openOnNewTab: true },
+    { openOnNewTab: true, openOnExternalLink: true },
     { hasOptionalPerms: false }
   );
   const ctrlC = await createOptionsController({
@@ -271,8 +290,87 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
     isMac: false,
   });
   assert.equal(domC.openOnNewTabInput.checked, false);
+  assert.equal(domC.openOnExternalLinkInput.checked, false);
   assert.equal(mockC.localStore.openOnNewTab, false);
+  assert.equal(mockC.localStore.openOnExternalLink, false);
   ctrlC.destroy();
+});
+
+test("openOnExternalLink toggle requests webRequest and origin permissions synchronously and handles denial", async () => {
+  const denyDom = createFakeOptionsDom();
+  const denyMock = createMockOptionsBrowser({}, { grantPermission: false });
+  const denyCtrl = await createOptionsController({
+    browserApi: denyMock.browserApi,
+    doc: denyDom.doc,
+    win: denyDom.win,
+  });
+
+  await denyDom.openOnExternalLinkInput.toggle(true);
+  assert.deepEqual(denyMock.permissionRequestCalls, [
+    {
+      permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+      origins: ["http://*/*", "https://*/*"],
+    },
+  ]);
+  assert.equal(denyDom.openOnExternalLinkInput.checked, false);
+  assert.equal(denyCtrl.getState().openOnExternalLink, false);
+  assert.equal(denyMock.localStore.openOnExternalLink, undefined);
+  assert.equal(
+    denyDom.statusEl.textContent,
+    "Permission is required to intercept external links"
+  );
+  assert.match(denyDom.statusEl.className, /save-status--error/);
+  denyCtrl.destroy();
+
+  const dom = createFakeOptionsDom();
+  const mock = createMockOptionsBrowser();
+  const ctrl = await createOptionsController({
+    browserApi: mock.browserApi,
+    doc: dom.doc,
+    win: dom.win,
+  });
+
+  await dom.openOnExternalLinkInput.toggle(true);
+  assert.equal(mock.callOrder[0][0], "permissions.request");
+  assert.equal(dom.openOnExternalLinkInput.checked, true);
+  assert.equal(mock.localStore.openOnExternalLink, true);
+  assert.equal(dom.statusEl.textContent, "Saved");
+
+  await dom.openOnExternalLinkInput.toggle(false);
+  assert.equal(dom.openOnExternalLinkInput.checked, false);
+  assert.equal(mock.localStore.openOnExternalLink, false);
+  assert.equal(mock.permissionRequestCalls.length, 1);
+  // Revokes all external-link optional permissions when openOnNewTab is off
+  assert.deepEqual(mock.permissionRemoveCalls, [
+    {
+      permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+      origins: ["http://*/*", "https://*/*"],
+    },
+  ]);
+  ctrl.destroy();
+
+  // When openOnNewTab is enabled, disabling openOnExternalLink revokes only webRequest + origins and keeps tabs/sessions
+  const keepDom = createFakeOptionsDom();
+  const keepMock = createMockOptionsBrowser({
+    openOnNewTab: true,
+    openOnExternalLink: true,
+  });
+  const keepCtrl = await createOptionsController({
+    browserApi: keepMock.browserApi,
+    doc: keepDom.doc,
+    win: keepDom.win,
+  });
+
+  await keepDom.openOnExternalLinkInput.toggle(false);
+  assert.equal(keepDom.openOnExternalLinkInput.checked, false);
+  assert.equal(keepMock.localStore.openOnExternalLink, false);
+  assert.deepEqual(keepMock.permissionRemoveCalls, [
+    {
+      permissions: ["webRequest", "webRequestBlocking"],
+      origins: ["http://*/*", "https://*/*"],
+    },
+  ]);
+  keepCtrl.destroy();
 });
 
 test("openOnNewTab toggle requests optional permissions synchronously, handles denial, and coexists with shortcut", async () => {
@@ -486,6 +584,7 @@ test("destroy unregisters all DOM, window, and storage listeners", async () => {
   });
 
   assert.equal(dom.openOnNewTabInput.listeners.get("change").length, 1);
+  assert.equal(dom.openOnExternalLinkInput.listeners.get("change").length, 1);
   assert.equal(dom.autoOpenInput.listeners.get("change").length, 1);
   assert.equal(dom.shortcutInput.listeners.get("focus").length, 1);
   assert.equal(dom.shortcutInput.listeners.get("click").length, 1);
@@ -499,6 +598,7 @@ test("destroy unregisters all DOM, window, and storage listeners", async () => {
   controller.destroy();
 
   assert.equal(dom.openOnNewTabInput.listeners.get("change").length, 0);
+  assert.equal(dom.openOnExternalLinkInput.listeners.get("change").length, 0);
   assert.equal(dom.autoOpenInput.listeners.get("change").length, 0);
   assert.equal(dom.shortcutInput.listeners.get("focus").length, 0);
   assert.equal(dom.shortcutInput.listeners.get("click").length, 0);

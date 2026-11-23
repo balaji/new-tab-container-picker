@@ -91,6 +91,41 @@ html[data-mode="tab"] .list-wrapper {
   background-color: var(--surface-canvas);
 }
 
+.target-url-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background-color: var(--surface-footer);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.target-url-banner[hidden] {
+  display: none;
+}
+
+.target-url-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.target-url-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+}
+
 .search-header {
   display: flex;
   align-items: center;
@@ -349,6 +384,17 @@ kbd {
 }
 
 @media (forced-colors: active) {
+  .target-url-banner {
+    border-bottom-color: ButtonBorder;
+    background-color: Canvas;
+    color: CanvasText;
+  }
+
+  .target-url-text,
+  .target-url-icon {
+    color: CanvasText;
+  }
+
   .search-input {
     border-color: ButtonBorder;
   }

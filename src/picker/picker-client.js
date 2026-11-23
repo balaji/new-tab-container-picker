@@ -3,6 +3,7 @@ import {
   getAvailableContainers,
 } from "../lib/containers.js";
 import { loadSettings } from "../lib/settings.js";
+import { parseHttpUrl } from "../lib/tab-detection.js";
 import { PREVIEW_CONTAINERS } from "./preview-data.js";
 
 /**
@@ -23,6 +24,7 @@ export function createPickerClient({
 }) {
   const params = new URLSearchParams(win.location?.search ?? "");
   const isInTabMode = params.get("mode") === "tab";
+  const targetUrl = parseHttpUrl(params.get("url"));
   const isPreviewMode =
     !browserApi?.contextualIdentities && params.get("preview") === "1";
 
@@ -53,6 +55,21 @@ export function createPickerClient({
     win.close?.();
   }
 
+  async function allowTargetUrlNavigation(cookieStoreId) {
+    if (!targetUrl || typeof browserApi?.runtime?.sendMessage !== "function") {
+      return;
+    }
+    try {
+      await browserApi.runtime.sendMessage({
+        type: "allow-external-url",
+        url: targetUrl,
+        cookieStoreId: cookieStoreId ?? DEFAULT_COOKIE_STORE_ID,
+      });
+    } catch {
+      // Proceed even if messaging is unavailable
+    }
+  }
+
   async function replaceCurrentPickerTab(createTabProps) {
     let currentTab = null;
     try {
@@ -62,14 +79,28 @@ export function createPickerClient({
     }
 
     const props = { ...createTabProps, active: true };
+    if (targetUrl) {
+      props.url = targetUrl;
+    }
     if (currentTab && typeof currentTab.windowId === "number") {
       props.windowId = currentTab.windowId;
     }
     if (currentTab && typeof currentTab.index === "number") {
       props.index = currentTab.index;
     }
-    if (!props.cookieStoreId && typeof currentTab?.id === "number") {
+    const currentIsDefault =
+      !currentTab?.cookieStoreId ||
+      currentTab.cookieStoreId === DEFAULT_COOKIE_STORE_ID;
+    if (
+      !props.cookieStoreId &&
+      currentIsDefault &&
+      typeof currentTab?.id === "number"
+    ) {
       props.openerTabId = currentTab.id;
+    }
+
+    if (targetUrl && props.openerTabId === undefined) {
+      await allowTargetUrlNavigation(props.cookieStoreId);
     }
 
     try {
@@ -166,8 +197,16 @@ export function createPickerClient({
       return;
     }
 
+    const popupCreateProps = targetUrl
+      ? { ...createProps, url: targetUrl, active: true }
+      : { ...createProps, active: true };
+
+    if (targetUrl) {
+      await allowTargetUrlNavigation(createProps.cookieStoreId);
+    }
+
     try {
-      await browserApi?.tabs?.create?.({ ...createProps, active: true });
+      await browserApi?.tabs?.create?.(popupCreateProps);
     } catch {
       // Close popup cleanly even if tab creation fails
     } finally {
@@ -227,6 +266,7 @@ export function createPickerClient({
   return {
     isInTabMode,
     isPreviewMode,
+    targetUrl,
     isSettled: () => settled,
     loadState,
     pickContainer,

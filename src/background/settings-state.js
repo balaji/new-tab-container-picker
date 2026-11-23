@@ -1,16 +1,18 @@
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
 } from "../lib/settings.js";
 
 /**
- * Manage extension settings state for background new-tab interception.
+ * Manage extension settings state for background new-tab and external-link interception.
  * @param {object} browserApi
  */
 export function createSettingsState(browserApi) {
   let openOnNewTab = DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB];
+  let openOnExternalLink = DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK];
   let autoOpenSingleMatch = DEFAULT_SETTINGS[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
 
   /**
@@ -20,6 +22,7 @@ export function createSettingsState(browserApi) {
   async function init() {
     const settings = await loadSettings(browserApi.storage?.local);
     openOnNewTab = settings[STORAGE_KEY_OPEN_ON_NEW_TAB];
+    openOnExternalLink = settings[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK];
     autoOpenSingleMatch = settings[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH];
   }
 
@@ -41,6 +44,14 @@ export function createSettingsState(browserApi) {
           : DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_NEW_TAB];
     }
 
+    if (STORAGE_KEY_OPEN_ON_EXTERNAL_LINK in changes) {
+      const next = changes[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]?.newValue;
+      openOnExternalLink =
+        typeof next === "boolean"
+          ? next
+          : DEFAULT_SETTINGS[STORAGE_KEY_OPEN_ON_EXTERNAL_LINK];
+    }
+
     if (STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH in changes) {
       const next = changes[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]?.newValue;
       autoOpenSingleMatch =
@@ -53,7 +64,12 @@ export function createSettingsState(browserApi) {
   return {
     init,
     isNewTabModeEnabled: () => openOnNewTab,
-    getSettings: () => ({ openOnNewTab, autoOpenSingleMatch }),
+    isExternalLinkModeEnabled: () => openOnExternalLink,
+    getSettings: () => ({
+      openOnNewTab,
+      openOnExternalLink,
+      autoOpenSingleMatch,
+    }),
     handleStorageChanged,
   };
 }

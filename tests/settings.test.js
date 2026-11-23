@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
+  STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
   STORAGE_KEY_OPEN_ON_NEW_TAB,
   loadSettings,
   normalizeSettings,
@@ -15,12 +16,14 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
   assert.deepEqual(normalizeSettings("invalid"), DEFAULT_SETTINGS);
   assert.deepEqual(DEFAULT_SETTINGS, {
     openOnNewTab: false,
+    openOnExternalLink: false,
     autoOpenSingleMatch: false,
   });
 
   assert.deepEqual(
     normalizeSettings({
       [STORAGE_KEY_OPEN_ON_NEW_TAB]: "yes",
+      [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: "yes",
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: 1,
     }),
     DEFAULT_SETTINGS
@@ -29,10 +32,12 @@ test("normalizeSettings fills defaults for missing, null, partial, or invalid-ty
   assert.deepEqual(
     normalizeSettings({
       [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
+      [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: true,
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
     }),
     {
       openOnNewTab: true,
+      openOnExternalLink: true,
       autoOpenSingleMatch: true,
     }
   );
@@ -47,16 +52,19 @@ test("loadSettings reads storage keys safely and falls back to defaults on error
       requestedKeys = keys;
       return {
         [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
+        [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: true,
         [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
       };
     },
   };
   assert.deepEqual(await loadSettings(storage), {
     openOnNewTab: true,
+    openOnExternalLink: true,
     autoOpenSingleMatch: true,
   });
   assert.deepEqual(requestedKeys, [
     STORAGE_KEY_OPEN_ON_NEW_TAB,
+    STORAGE_KEY_OPEN_ON_EXTERNAL_LINK,
     STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
   ]);
 
@@ -103,6 +111,7 @@ test("saveSettings persists valid boolean keys and ignores invalid or unknown en
     await saveSettings(mockStorage, {
       unknownKey: "ignored",
       [STORAGE_KEY_OPEN_ON_NEW_TAB]: true,
+      [STORAGE_KEY_OPEN_ON_EXTERNAL_LINK]: true,
       [STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]: true,
     }),
     true
@@ -110,6 +119,7 @@ test("saveSettings persists valid boolean keys and ignores invalid or unknown en
   assert.deepEqual(writes, [
     {
       openOnNewTab: true,
+      openOnExternalLink: true,
       autoOpenSingleMatch: true,
     },
   ]);
