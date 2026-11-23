@@ -6,11 +6,11 @@ A lightweight **Manifest V3** Firefox extension for opening new tabs in any Fire
 
 Firefox already provides a way to always ask for a container while opening a new tab, but it works only on mouse click, the option in settings is literally called `privacy.userContext.newTabContainerOnLeftClick.enabled`
 
-<p align="center"><i>Firefox settings for Container</i></p>
+<p><i>Firefox settings for Container</i></p>
 
 <img src="./assets/firefox%20setting.png" width="300" />
 
-<p align="center"><i>Container picker view on mouse click (Default behaviour)</i></p>
+<p><i>Container picker view on mouse click (Default behaviour)</i></p>
 
 <img src="assets/default%20firefox%20behavior.png" width="200" />
 
