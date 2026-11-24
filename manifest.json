@@ -45,7 +45,7 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Ctrl+Shift+Y"
+        "default": "Ctrl+Shift+U"
       },
       "description": "Open the container picker popup"
     }

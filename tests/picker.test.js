@@ -111,8 +111,6 @@ function createFakeDom(search = "") {
   settingsBtn.id = "open-settings";
   const toggleBtn = new FakeElement("button");
   toggleBtn.id = "extension-toggle";
-  const toggleLabel = new FakeElement("span");
-  toggleLabel.id = "extension-toggle-label";
   const targetUrlBanner = new FakeElement("div");
   targetUrlBanner.id = "target-url-banner";
   targetUrlBanner.hidden = true;
@@ -129,7 +127,6 @@ function createFakeDom(search = "") {
     ["status-announcer", announcerEl],
     ["open-settings", settingsBtn],
     ["extension-toggle", toggleBtn],
-    ["extension-toggle-label", toggleLabel],
     ["target-url-banner", targetUrlBanner],
     ["target-url-text", targetUrlText],
     ["picker-error", errorEl],
@@ -221,7 +218,6 @@ function createFakeDom(search = "") {
     announcerEl,
     settingsBtn,
     toggleBtn,
-    toggleLabel,
     errorEl,
   };
 }
@@ -361,7 +357,7 @@ test("picker highlights first container initially, puts Default last, navigates,
 });
 
 test("on/off switch reflects stored state, persists toggles, and ignores Enter for container picking", async () => {
-  const { doc, win, toggleBtn, toggleLabel } = createFakeDom();
+  const { doc, win, toggleBtn } = createFakeDom();
   const { browserApi, createdTabs } = createTestPickerApi();
   const store = { extensionEnabled: false };
   const writes = [];
@@ -381,13 +377,19 @@ test("on/off switch reflects stored state, persists toggles, and ignores Enter f
 
   assert.equal(controller.getState().extensionEnabled, false);
   assert.equal(toggleBtn.getAttribute("aria-checked"), "false");
-  assert.equal(toggleLabel.textContent, "Off");
+  assert.equal(
+    toggleBtn.getAttribute("title"),
+    "Resume advanced features (new tabs & external links)"
+  );
 
   toggleBtn.dispatchEvent({ type: "click" });
   await Promise.resolve();
   assert.deepEqual(writes, [{ extensionEnabled: true }]);
   assert.equal(toggleBtn.getAttribute("aria-checked"), "true");
-  assert.equal(toggleLabel.textContent, "On");
+  assert.equal(
+    toggleBtn.getAttribute("title"),
+    "Pause advanced features (new tabs & external links)"
+  );
 
   toggleBtn.focus();
   doc.dispatchKeyDown("Enter");
@@ -395,7 +397,11 @@ test("on/off switch reflects stored state, persists toggles, and ignores Enter f
   assert.equal(createdTabs.length, 0);
 
   storageListeners[0]({ extensionEnabled: { newValue: false } }, "local");
-  assert.equal(toggleLabel.textContent, "Off");
+  assert.equal(toggleBtn.getAttribute("aria-checked"), "false");
+  assert.equal(
+    toggleBtn.getAttribute("title"),
+    "Resume advanced features (new tabs & external links)"
+  );
 
   controller.destroy();
   assert.equal(storageListeners.length, 0);
@@ -432,7 +438,9 @@ test("picker closes on Escape without creating a tab and opens Default tab on cl
     preventDefault() {},
   });
   await Promise.resolve();
-  assert.deepEqual(apiB.createdTabs, [{ active: true }]);
+  assert.deepEqual(apiB.createdTabs, [
+    { cookieStoreId: "firefox-default", active: true },
+  ]);
   assert.equal(domB.win.closed, true);
   controllerB.destroy();
 });
@@ -489,7 +497,9 @@ test("autoOpenSingleMatch auto-opens named container or Default when search narr
   dom2.searchInput.value = "def";
   dom2.searchInput.dispatchEvent({ type: "input" });
   await Promise.resolve();
-  assert.deepEqual(api2.createdTabs, [{ active: true }]);
+  assert.deepEqual(api2.createdTabs, [
+    { cookieStoreId: "firefox-default", active: true },
+  ]);
   assert.equal(dom2.win.closed, true);
   ctrl2.destroy();
 });
@@ -743,7 +753,13 @@ test("picker in-tab mode (?mode=tab) sets data-mode=tab, replaces current tab on
   domB.doc.dispatchKeyDown("Escape");
   await flushMicrotasks();
   assert.deepEqual(createdB, [
-    { windowId: 10, index: 1, active: true, openerTabId: 50 },
+    {
+      windowId: 10,
+      index: 1,
+      cookieStoreId: "firefox-default",
+      active: true,
+      openerTabId: 50,
+    },
   ]);
   assert.deepEqual(removedB, [50]);
   ctrlB.destroy();

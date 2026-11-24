@@ -147,7 +147,7 @@ test("createListRenderer renders rows, updates ARIA highlight/scroll, toggles em
   assert.equal(emptyStateEl.hidden, true);
   assert.equal(listEl.children.length, 2);
   assert.equal(listEl.children[0].className, "container-item container-item--default");
-  assert.equal(listEl.children[0].children.at(-1).textContent, "No container");
+  assert.equal(listEl.children[0].children.at(-1).textContent, "firefox-default");
   assert.equal(listEl.children[1].style.getPropertyValue("--container-color"), "#ff9f00");
   assert.equal(searchInput.getAttribute("aria-activedescendant"), "container-option-0");
 

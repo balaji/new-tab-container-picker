@@ -33,7 +33,6 @@ export async function createPickerController(deps = {}) {
   const announcerEl = doc.getElementById("status-announcer");
   const settingsBtn = doc.getElementById("open-settings");
   const toggleBtn = doc.getElementById("extension-toggle");
-  const toggleLabel = doc.getElementById("extension-toggle-label");
   const targetUrlBanner = doc.getElementById("target-url-banner");
   const targetUrlText = doc.getElementById("target-url-text");
   const errorEl = doc.getElementById("picker-error");
@@ -78,18 +77,19 @@ export async function createPickerController(deps = {}) {
     toggleBtn.setAttribute?.("aria-checked", String(extensionEnabled));
     toggleBtn.setAttribute?.(
       "title",
-      extensionEnabled ? "Turn the extension off" : "Turn the extension on"
+      extensionEnabled
+        ? "Pause advanced features (new tabs & external links)"
+        : "Resume advanced features (new tabs & external links)"
     );
-    if (toggleLabel) {
-      toggleLabel.textContent = extensionEnabled ? "On" : "Off";
-    }
   }
 
   async function handleToggleClick() {
     extensionEnabled = !extensionEnabled;
     renderExtensionToggle();
     announcer.announceImmediate(
-      extensionEnabled ? "Extension turned on" : "Extension turned off"
+      extensionEnabled
+        ? "Advanced features turned on"
+        : "Advanced features turned off"
     );
     try {
       await saveSettings(browserApi?.storage?.local, {
@@ -98,7 +98,7 @@ export async function createPickerController(deps = {}) {
     } catch {
       extensionEnabled = !extensionEnabled;
       renderExtensionToggle();
-      setErrorMessage("Couldn\u2019t save the on/off setting. Try again.");
+      setErrorMessage("Couldn\u2019t save the advanced features setting. Try again.");
     }
   }
 

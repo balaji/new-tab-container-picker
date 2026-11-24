@@ -94,10 +94,10 @@ test("eventToShortcut maps macOS shortcuts using physical event.code (including 
 test("eventToShortcut handles Windows/Linux modifiers, function keys, Meta rejection, and fallback keys", () => {
   assert.deepEqual(
     eventToShortcut(
-      { ctrlKey: true, shiftKey: true, code: "KeyU", key: "U" },
+      { ctrlKey: true, shiftKey: true, code: "KeyY", key: "Y" },
       { isMac: false }
     ),
-    { status: "valid", shortcut: "Ctrl+Shift+U" }
+    { status: "valid", shortcut: "Ctrl+Shift+Y" }
   );
 
   assert.deepEqual(
@@ -179,12 +179,12 @@ test("formatShortcutForDisplay formats macOS and non-macOS shortcuts and empty v
   assert.equal(formatShortcutForDisplay("", { isMac: true }), "Not set");
   assert.equal(formatShortcutForDisplay(null, { isMac: false }), "Not set");
   assert.equal(
-    formatShortcutForDisplay("Ctrl+Shift+Y", { isMac: true }),
-    "Command+Shift+Y"
+    formatShortcutForDisplay("Ctrl+Shift+U", { isMac: true }),
+    "Command+Shift+U"
   );
   assert.equal(
-    formatShortcutForDisplay("Ctrl+Shift+Y", { isMac: false }),
-    "Ctrl+Shift+Y"
+    formatShortcutForDisplay("Ctrl+Shift+U", { isMac: false }),
+    "Ctrl+Shift+U"
   );
   assert.equal(
     formatShortcutForDisplay("Alt+Shift+T", { isMac: true }),
@@ -247,8 +247,8 @@ test("commands API wrappers read, update, and reset shortcuts safely", async () 
     },
   };
 
-  assert.equal(DEFAULT_PICKER_SHORTCUT, "Ctrl+Shift+Y");
-  assert.equal(await getCommandShortcut(commandsApi), "Ctrl+Shift+Y");
+  assert.equal(DEFAULT_PICKER_SHORTCUT, "Ctrl+Shift+U");
+  assert.equal(await getCommandShortcut(commandsApi), "Ctrl+Shift+U");
 
   const updated = await updateCommandShortcut(commandsApi, "shift+alt+c");
   assert.equal(updated, "Alt+Shift+C");
@@ -261,7 +261,7 @@ test("commands API wrappers read, update, and reset shortcuts safely", async () 
   assert.equal(storedShortcut, "");
 
   const resetVal = await resetCommandShortcut(commandsApi);
-  assert.equal(resetVal, "Ctrl+Shift+Y");
+  assert.equal(resetVal, "Ctrl+Shift+U");
   assert.deepEqual(resetCalls, ["_execute_action"]);
 
   await assert.rejects(

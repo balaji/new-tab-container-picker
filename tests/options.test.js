@@ -118,7 +118,7 @@ function createFakeOptionsDom() {
 function createMockOptionsBrowser(initialStore = {}, options = {}) {
   const localStore = { ...initialStore };
   const onChangedListeners = new Set();
-  let commandShortcut = options.shortcut ?? "Ctrl+Shift+Y";
+  let commandShortcut = options.shortcut ?? "Ctrl+Shift+U";
   const updateCalls = [];
   const resetCalls = [];
   const permissionRequestCalls = [];
@@ -203,7 +203,7 @@ function createMockOptionsBrowser(initialStore = {}, options = {}) {
           throw new Error("Reset failed");
         }
         resetCalls.push(name);
-        commandShortcut = "Ctrl+Shift+Y";
+        commandShortcut = "Ctrl+Shift+U";
       },
     },
   };
@@ -242,13 +242,13 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
   assert.equal(domA.openOnExternalLinkInput.checked, false);
   assert.equal(domA.autoOpenInput.checked, false);
   assert.equal(domA.shortcutInput.disabled, false);
-  assert.equal(domA.shortcutInput.value, "Command+Shift+Y");
+  assert.equal(domA.shortcutInput.value, "Command+Shift+U");
   assert.deepEqual(ctrlA.getState(), {
     openOnNewTab: false,
     openOnExternalLink: false,
     autoOpenSingleMatch: false,
     extensionEnabled: true,
-    shortcut: "Ctrl+Shift+Y",
+    shortcut: "Ctrl+Shift+U",
   });
   ctrlA.destroy();
 
@@ -260,7 +260,7 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
       openOnExternalLink: true,
       autoOpenSingleMatch: true,
     },
-    { shortcut: "Ctrl+Shift+U", hasOptionalPerms: true }
+    { shortcut: "Ctrl+Shift+Y", hasOptionalPerms: true }
   );
   const ctrlB = await createOptionsController({
     browserApi: mockB.browserApi,
@@ -275,7 +275,7 @@ test("options page loads shortcut and toggle defaults, stored values, and permis
   assert.equal(domB.shortcutInput.disabled, false);
   assert.equal(domB.resetBtn.disabled, false);
   assert.equal(domB.clearBtn.disabled, false);
-  assert.equal(domB.shortcutInput.value, "Ctrl+Shift+U");
+  assert.equal(domB.shortcutInput.value, "Ctrl+Shift+Y");
   ctrlB.destroy();
 
   // Stored openOnNewTab=true and openOnExternalLink=true without optional permissions fall back to false
@@ -396,7 +396,7 @@ test("openOnNewTab toggle requests optional permissions synchronously, handles d
   denyCtrl.destroy();
 
   const dom = createFakeOptionsDom();
-  const mock = createMockOptionsBrowser({}, { shortcut: "Ctrl+Shift+U" });
+  const mock = createMockOptionsBrowser({}, { shortcut: "Ctrl+Shift+Y" });
   const controller = await createOptionsController({
     browserApi: mock.browserApi,
     doc: dom.doc,
@@ -411,7 +411,7 @@ test("openOnNewTab toggle requests optional permissions synchronously, handles d
   // Shortcut remains enabled and completely untouched
   assert.equal(mock.updateCalls.length, 0);
   assert.equal(dom.shortcutInput.disabled, false);
-  assert.equal(dom.shortcutInput.value, "Command+Shift+U");
+  assert.equal(dom.shortcutInput.value, "Command+Shift+Y");
   assert.equal(dom.statusEl.textContent, "Saved");
 
   await dom.openOnNewTabInput.toggle(false);
@@ -448,8 +448,8 @@ test("shortcut recorder captures valid combos on macOS, handles Escape/Tab/error
 
   await dom.shortcutInput.dispatch("keydown", {
     shiftKey: true,
-    code: "KeyU",
-    key: "U",
+    code: "KeyY",
+    key: "Y",
   });
   assert.equal(mock.updateCalls.length, 0);
   assert.match(dom.statusEl.className, /save-status--error/);
@@ -457,15 +457,15 @@ test("shortcut recorder captures valid combos on macOS, handles Escape/Tab/error
   const saveRes = await dom.shortcutInput.dispatch("keydown", {
     metaKey: true,
     shiftKey: true,
-    code: "KeyU",
-    key: "U",
+    code: "KeyY",
+    key: "Y",
   });
   assert.equal(saveRes.prevented, true);
   assert.equal(saveRes.stopped, true);
   assert.deepEqual(mock.updateCalls, [
-    { name: "_execute_action", shortcut: "Command+Shift+U" },
+    { name: "_execute_action", shortcut: "Command+Shift+Y" },
   ]);
-  assert.equal(dom.shortcutInput.value, "Command+Shift+U");
+  assert.equal(dom.shortcutInput.value, "Command+Shift+Y");
   assert.equal(dom.statusEl.textContent, "Shortcut saved");
 
   await dom.shortcutInput.focus();
@@ -473,7 +473,7 @@ test("shortcut recorder captures valid combos on macOS, handles Escape/Tab/error
   assert.equal(tabRes.prevented, false);
 
   await dom.shortcutInput.dispatch("keydown", { key: "Escape", code: "Escape" });
-  assert.equal(dom.shortcutInput.value, "Command+Shift+U");
+  assert.equal(dom.shortcutInput.value, "Command+Shift+Y");
 
   await dom.clearBtn.dispatch("click");
   assert.deepEqual(mock.updateCalls.at(-1), {
@@ -486,7 +486,7 @@ test("shortcut recorder captures valid combos on macOS, handles Escape/Tab/error
 
   await dom.resetBtn.dispatch("click");
   assert.deepEqual(mock.resetCalls, ["_execute_action"]);
-  assert.equal(dom.shortcutInput.value, "Command+Shift+Y");
+  assert.equal(dom.shortcutInput.value, "Command+Shift+U");
   assert.equal(dom.clearBtn.disabled, false);
   assert.equal(dom.statusEl.textContent, "Shortcut reset to default");
 
@@ -517,7 +517,7 @@ test("shortcut recorder surfaces Firefox commands.update rejections cleanly", as
   });
   assert.equal(dom.statusEl.textContent, "Shortcut in use by Firefox");
   assert.match(dom.statusEl.className, /save-status--error/);
-  assert.equal(controller.getState().shortcut, "Ctrl+Shift+Y");
+  assert.equal(controller.getState().shortcut, "Ctrl+Shift+U");
 
   controller.destroy();
 });

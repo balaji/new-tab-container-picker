@@ -160,7 +160,7 @@ test("picker client toolbar popup mode creates tabs at end of strip, enforces se
   // Default popup pick tells the background to skip its own new tab before creating it
   assert.deepEqual(createdTabsB, [
     { message: { type: "expect-own-new-tab" } },
-    { active: true },
+    { cookieStoreId: "firefox-default", active: true },
   ]);
   assert.equal(closedB, 1);
 
@@ -280,7 +280,13 @@ test("picker client in-tab mode replaces current picker tab at index, sets opene
 
   await clientDefault.pickContainer("firefox-default", "Default");
   assert.deepEqual(createdDefault, [
-    { windowId: 10, index: 1, active: true, openerTabId: 60 },
+    {
+      windowId: 10,
+      index: 1,
+      cookieStoreId: "firefox-default",
+      active: true,
+      openerTabId: 60,
+    },
   ]);
   assert.deepEqual(removedDefault, [60]);
 
@@ -309,7 +315,13 @@ test("picker client in-tab mode replaces current picker tab at index, sets opene
 
   await clientEsc.cancelEscape();
   assert.deepEqual(createdEsc, [
-    { windowId: 12, index: 3, active: true, openerTabId: 70 },
+    {
+      windowId: 12,
+      index: 3,
+      cookieStoreId: "firefox-default",
+      active: true,
+      openerTabId: 70,
+    },
   ]);
   assert.deepEqual(removedEsc, [70]);
 
@@ -456,6 +468,7 @@ test("picker client in-tab mode with target URL opens selected container or Defa
       windowId: 10,
       index: 2,
       url: target,
+      cookieStoreId: "firefox-default",
       openerTabId: 92,
       active: true,
     },
@@ -493,6 +506,7 @@ test("picker client in-tab mode with target URL opens selected container or Defa
       windowId: 10,
       index: 2,
       url: target,
+      cookieStoreId: "firefox-default",
       active: true,
     },
   ]);

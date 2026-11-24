@@ -122,8 +122,10 @@ export function createPickerClient({
     const currentIsDefault =
       !currentTab?.cookieStoreId ||
       currentTab.cookieStoreId === DEFAULT_COOKIE_STORE_ID;
+    const targetIsDefault =
+      !props.cookieStoreId || props.cookieStoreId === DEFAULT_COOKIE_STORE_ID;
     if (
-      !props.cookieStoreId &&
+      targetIsDefault &&
       currentIsDefault &&
       typeof currentTab?.id === "number"
     ) {
@@ -219,10 +221,9 @@ export function createPickerClient({
       return;
     }
 
-    const createProps =
-      cookieStoreId === DEFAULT_COOKIE_STORE_ID
-        ? {}
-        : { cookieStoreId };
+    const createProps = {
+      cookieStoreId: cookieStoreId || DEFAULT_COOKIE_STORE_ID,
+    };
 
     if (isInTabMode) {
       if (!(await replaceCurrentPickerTab(createProps))) {
@@ -238,7 +239,7 @@ export function createPickerClient({
     if (targetUrl) {
       await allowTargetUrlNavigation(createProps.cookieStoreId);
     } else if (
-      !createProps.cookieStoreId &&
+      createProps.cookieStoreId === DEFAULT_COOKIE_STORE_ID &&
       typeof browserApi?.runtime?.sendMessage === "function"
     ) {
       await expectOwnNewTab();
@@ -271,7 +272,11 @@ export function createPickerClient({
     }
 
     if (isInTabMode) {
-      if (!(await replaceCurrentPickerTab({}))) {
+      if (
+        !(await replaceCurrentPickerTab({
+          cookieStoreId: DEFAULT_COOKIE_STORE_ID,
+        }))
+      ) {
         reportOpenFailure();
       }
       return;

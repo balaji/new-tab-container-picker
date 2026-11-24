@@ -1,5 +1,5 @@
 export const COMMAND_OPEN_PICKER = "_execute_action";
-export const DEFAULT_PICKER_SHORTCUT = "Ctrl+Shift+Y";
+export const DEFAULT_PICKER_SHORTCUT = "Ctrl+Shift+U";
 
 const MODIFIER_ALIASES = Object.freeze({
   ctrl: "Ctrl",

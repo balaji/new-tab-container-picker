@@ -77,7 +77,7 @@ function createMockBrowser(initial = {}) {
   const forgottenWindowsLog = [];
   const forgottenTabsLog = [];
   const commandsUpdateLog = [];
-  let commandShortcut = initial.shortcut ?? "Ctrl+Shift+Y";
+  let commandShortcut = initial.shortcut ?? "Ctrl+Shift+U";
 
   const tabsOnCreated = createEventEmitter();
   const tabsOnUpdated = createEventEmitter();
@@ -677,7 +677,7 @@ test("6b. Global on/off switch suspends interception, keeps preferences, and sho
 test("7. Optional permissions lifecycle handles startup without tabs without deadlocking, dynamic sessions grant, and tabs revocation without touching shortcut", async () => {
   const startupMock = createMockBrowser({
     localStorage: { openOnNewTab: true },
-    shortcut: "Ctrl+Shift+U",
+    shortcut: "Ctrl+Shift+Y",
     permissions: [],
     omitSessions: true,
   });
@@ -687,7 +687,7 @@ test("7. Optional permissions lifecycle handles startup without tabs without dea
   assert.equal(startupCtrl.isNewTabModeEnabled(), false);
   assert.equal(startupMock.localStore.openOnNewTab, false);
   assert.equal(startupMock.commandsUpdateLog.length, 0);
-  assert.equal(startupMock.getCommandShortcut(), "Ctrl+Shift+U");
+  assert.equal(startupMock.getCommandShortcut(), "Ctrl+Shift+Y");
 
   startupMock.recentlyClosed.unshift({
     tab: {
@@ -704,7 +704,7 @@ test("7. Optional permissions lifecycle handles startup without tabs without dea
 
   const revokeMock = createMockBrowser({
     localStorage: { openOnNewTab: true },
-    shortcut: "Ctrl+Shift+U",
+    shortcut: "Ctrl+Shift+Y",
     permissions: ["tabs", "sessions"],
   });
   const revokeCtrl = createBackgroundController(revokeMock.browser);
@@ -714,7 +714,7 @@ test("7. Optional permissions lifecycle handles startup without tabs without dea
   assert.equal(revokeCtrl.isNewTabModeEnabled(), false);
   assert.equal(revokeMock.localStore.openOnNewTab, false);
   assert.equal(revokeMock.commandsUpdateLog.length, 0);
-  assert.equal(revokeMock.getCommandShortcut(), "Ctrl+Shift+U");
+  assert.equal(revokeMock.getCommandShortcut(), "Ctrl+Shift+Y");
 
   revokeCtrl.destroy();
 });

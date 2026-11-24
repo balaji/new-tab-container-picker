@@ -1,3 +1,5 @@
+import { DEFAULT_COOKIE_STORE_ID } from "../lib/containers.js";
+
 export const SAFE_ICON_URL_RE =
   /^resource:\/\/usercontext-content\/[a-z0-9_-]+\.svg$/i;
 
@@ -137,7 +139,7 @@ export function createListRenderer({
       if (container.isDefault) {
         const badgeEl = doc.createElement("span");
         badgeEl.className = "container-badge";
-        badgeEl.textContent = "No container";
+        badgeEl.textContent = DEFAULT_COOKIE_STORE_ID;
         li.append(badgeEl);
       }
 
