@@ -33,6 +33,8 @@ function normalizeRequestKey(rawUrl) {
  *   isEnabled?: () => boolean,
  *   isInitialized?: () => boolean,
  *   isTabIgnored?: (tabId: number) => boolean,
+ *   isRestoredTab?: (details: { tabId: number, url: string, cookieStoreId?: string }) => Promise<boolean> | boolean,
+ *   onTabSettled?: (tabId: number) => void,
  *   onExternalLinkDetected?: (details: { tabId: number, url: string }) => Promise<boolean> | boolean,
  *   debugLog?: (event: string, data?: Record<string, unknown>) => void,
  *   candidateTtlMs?: number,
@@ -44,6 +46,9 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
   const isEnabled = deps.isEnabled ?? (() => false);
   const isInitialized = deps.isInitialized ?? (() => true);
   const isTabIgnored = deps.isTabIgnored ?? (() => false);
+  const isRestoredTab = deps.isRestoredTab ?? (() => false);
+  const onTabSettled =
+    typeof deps.onTabSettled === "function" ? deps.onTabSettled : () => {};
   const onExternalLinkDetected = deps.onExternalLinkDetected ?? (() => false);
   const debugLog = typeof deps.debugLog === "function" ? deps.debugLog : () => {};
   const candidateTtlMs = deps.candidateTtlMs ?? DEFAULT_CANDIDATE_TTL_MS;
@@ -56,6 +61,13 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
   const allowedNavigations = new Set();
   /** @type {Map<number, Set<(tracked: boolean) => void>>} */
   const candidateWaiters = new Map();
+
+  function markSettled(tabId, { stamp = true } = {}) {
+    settledTabs.add(tabId);
+    if (stamp) {
+      onTabSettled(tabId);
+    }
+  }
 
   function notifyCandidateWaiters(tabId, tracked) {
     const waiters = candidateWaiters.get(tabId);
@@ -226,7 +238,9 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       isTabIgnored(tab.id) ||
       isOwnTab(tab)
     ) {
-      settledTabs.add(tab.id);
+      markSettled(tab.id, {
+        stamp: tab.incognito !== true && !isOwnTab(tab),
+      });
       const reason =
         tab.incognito === true
           ? "incognito"
@@ -250,7 +264,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
     const effectiveUrl = getEffectiveTabUrl(tab);
     const urlKind = classifyTabUrl(effectiveUrl);
     if (urlKind !== "pending" && parseHttpUrl(effectiveUrl) === null) {
-      settledTabs.add(tab.id);
+      markSettled(tab.id);
       debugLog("track:skip", {
         tabId: tab.id,
         reason: `url-kind:${urlKind}`,
@@ -263,7 +277,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
     clearCandidate(tab.id);
     const timerId = setTimeout(() => {
       candidateTabs.delete(tab.id);
-      settledTabs.add(tab.id);
+      markSettled(tab.id);
       debugLog("candidate:expired", { tabId: tab.id });
     }, candidateTtlMs);
     candidateTabs.set(tab.id, timerId);
@@ -295,12 +309,16 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
         changeInfo?.url !== undefined &&
         classifyTabUrl(changeInfo.url) === "newtab"
       ) {
-        settledTabs.add(tabId);
+        markSettled(tabId, {
+          stamp: updatedTab?.incognito !== true && !isOwnTab(updatedTab),
+        });
       } else if (
         changeInfo?.status === "complete" &&
         classifyTabUrl(getEffectiveTabUrl(updatedTab)) === "other"
       ) {
-        settledTabs.add(tabId);
+        markSettled(tabId, {
+          stamp: updatedTab?.incognito !== true && !isOwnTab(updatedTab),
+        });
       }
       return;
     }
@@ -310,7 +328,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       isOwnTab(updatedTab)
     ) {
       clearCandidate(tabId);
-      settledTabs.add(tabId);
+      markSettled(tabId, { stamp: false });
       debugLog("update:drop", { tabId, reason: "own-tab", url: changeInfo?.url });
       return;
     }
@@ -319,19 +337,33 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       const nextKind = classifyTabUrl(changeInfo.url);
       if (nextKind === "newtab") {
         clearCandidate(tabId);
-        settledTabs.add(tabId);
+        markSettled(tabId, { stamp: updatedTab?.incognito !== true });
         debugLog("update:drop", { tabId, reason: "newtab", url: changeInfo.url });
         return;
       }
       if (nextKind === "other" && parseHttpUrl(changeInfo.url) === null) {
         clearCandidate(tabId);
-        settledTabs.add(tabId);
+        markSettled(tabId, { stamp: updatedTab?.incognito !== true });
         debugLog("update:drop", {
           tabId,
           reason: "non-http",
           url: changeInfo.url,
         });
+        return;
       }
+    }
+
+    if (
+      changeInfo?.status === "complete" &&
+      classifyTabUrl(getEffectiveTabUrl(updatedTab)) === "other"
+    ) {
+      clearCandidate(tabId);
+      markSettled(tabId, { stamp: updatedTab?.incognito !== true });
+      debugLog("update:drop", {
+        tabId,
+        reason: "load-complete",
+        url: getEffectiveTabUrl(updatedTab),
+      });
     }
   }
 
@@ -405,7 +437,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
 
     if (consumeAllowedNavigation(targetUrl, details.cookieStoreId)) {
       clearCandidate(details.tabId);
-      settledTabs.add(details.tabId);
+      markSettled(details.tabId);
       debugLog("request:skip", {
         tabId: details.tabId,
         reason: "allowed-navigation",
@@ -417,7 +449,7 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
 
     if (isTabIgnored(details.tabId)) {
       clearCandidate(details.tabId);
-      settledTabs.add(details.tabId);
+      markSettled(details.tabId, { stamp: false });
       debugLog("request:skip", {
         tabId: details.tabId,
         reason: "tab-ignored",
@@ -474,7 +506,9 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
             : "warm-fallback";
           settledTabs.add(details.tabId);
         } else {
-          settledTabs.add(details.tabId);
+          markSettled(details.tabId, {
+            stamp: freshTab?.incognito !== true && !isOwnTab(freshTab),
+          });
           debugLog("request:skip", {
             tabId: details.tabId,
             reason: "fallback-ineligible",
@@ -509,6 +543,23 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       return {};
     }
 
+    if (
+      await isRestoredTab({
+        tabId: details.tabId,
+        url: targetUrl,
+        cookieStoreId: details.cookieStoreId,
+      })
+    ) {
+      markSettled(details.tabId);
+      debugLog("request:skip", {
+        tabId: details.tabId,
+        reason: "session-restored",
+        url: targetUrl,
+        cookieStoreId: details.cookieStoreId,
+      });
+      return {};
+    }
+
     debugLog("request:match", {
       tabId: details.tabId,
       source: matchSource,
@@ -520,6 +571,10 @@ export function createExternalLinkWatcher(browserApi, deps = {}) {
       tabId: details.tabId,
       url: targetUrl,
     });
+
+    if (!intercepted) {
+      onTabSettled(details.tabId);
+    }
 
     return intercepted ? { cancel: true } : {};
   }

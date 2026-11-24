@@ -70,6 +70,8 @@ function createMockBrowser(initial = {}) {
   const recentlyClosed = (initial.recentlyClosed ?? []).map((entry) =>
     structuredClone(entry)
   );
+  const tabSessionValues = new Map();
+  const closedSessionValues = new Map();
 
   const createdTabsLog = [];
   const updatedTabsLog = [];
@@ -131,6 +133,17 @@ function createMockBrowser(initial = {}) {
     async getRecentlyClosed() {
       return recentlyClosed.map((entry) => structuredClone(entry));
     },
+    async setTabValue(tabId, key, value) {
+      let store = tabSessionValues.get(tabId);
+      if (!store) {
+        store = new Map();
+        tabSessionValues.set(tabId, store);
+      }
+      store.set(key, structuredClone(value));
+    },
+    async getTabValue(tabId, key) {
+      return tabSessionValues.get(tabId)?.get(key);
+    },
     async forgetClosedWindow(sessionId) {
       const idx = recentlyClosed.findIndex(
         (entry) => entry.window?.sessionId === sessionId
@@ -138,6 +151,7 @@ function createMockBrowser(initial = {}) {
       if (idx !== -1) {
         recentlyClosed.splice(idx, 1);
       }
+      closedSessionValues.delete(sessionId);
       forgottenWindowsLog.push(sessionId);
       void sessionsOnChanged.emit();
     },
@@ -150,6 +164,7 @@ function createMockBrowser(initial = {}) {
       if (idx !== -1) {
         recentlyClosed.splice(idx, 1);
       }
+      closedSessionValues.delete(sessionId);
       forgottenTabsLog.push({ windowId, sessionId });
       void sessionsOnChanged.emit();
     },
@@ -160,6 +175,9 @@ function createMockBrowser(initial = {}) {
       onCreated: tabsOnCreated,
       onUpdated: tabsOnUpdated,
       onRemoved: tabsOnRemoved,
+      async query() {
+        return [...tabsMap.values()].map((t) => ({ ...t }));
+      },
       async get(tabId) {
         const tab = tabsMap.get(tabId);
         if (!tab) throw new Error(`No tab ${tabId}`);
@@ -199,12 +217,18 @@ function createMockBrowser(initial = {}) {
         const tab = tabsMap.get(tabId);
         if (!tab) throw new Error(`No tab ${tabId}`);
         tabsMap.delete(tabId);
+        const savedValues = tabSessionValues.get(tabId);
+        tabSessionValues.delete(tabId);
         removedTabsLog.push(tabId);
         if (tab.url && tab.url !== "about:newtab" && tab.url !== "about:blank") {
+          const sessionId = `tab-sess-${nextSessionId++}`;
+          if (savedValues && savedValues.size > 0) {
+            closedSessionValues.set(sessionId, new Map(savedValues));
+          }
           recentlyClosed.unshift({
             tab: {
               ...tab,
-              sessionId: `tab-sess-${nextSessionId++}`,
+              sessionId,
             },
           });
         }
@@ -231,17 +255,26 @@ function createMockBrowser(initial = {}) {
         const win = windowsMap.get(windowId);
         if (!win) throw new Error(`No window ${windowId}`);
         const winTabs = [];
+        const winSavedValues = [];
         for (const [tId, t] of [...tabsMap.entries()]) {
           if (t.windowId === windowId) {
             winTabs.push({ ...t });
+            winSavedValues.push(
+              tabSessionValues.has(tId)
+                ? new Map(tabSessionValues.get(tId))
+                : null
+            );
+            tabSessionValues.delete(tId);
             tabsMap.delete(tId);
           }
         }
         windowsMap.delete(windowId);
+        const sessionId = `win-sess-${nextSessionId++}`;
+        closedSessionValues.set(sessionId, winSavedValues);
         recentlyClosed.unshift({
           window: {
             ...win,
-            sessionId: `win-sess-${nextSessionId++}`,
+            sessionId,
             tabs: winTabs,
           },
         });
@@ -425,6 +458,113 @@ function createMockBrowser(initial = {}) {
       }
       return structuredClone(tabSession);
     },
+    async simulateUndoCloseTab({ emitSessionsChangedBeforeRequest = true } = {}) {
+      const idx = recentlyClosed.findIndex((entry) => entry.tab);
+      if (idx === -1) {
+        return null;
+      }
+      const [popped] = recentlyClosed.splice(idx, 1);
+      const closedTab = popped.tab;
+      const savedValues = closedSessionValues.get(closedTab.sessionId);
+      closedSessionValues.delete(closedTab.sessionId);
+
+      const id = nextTabId++;
+      const restoredTab = {
+        id,
+        windowId: closedTab.windowId ?? 10,
+        index: closedTab.index ?? 0,
+        url: "about:blank",
+        cookieStoreId: closedTab.cookieStoreId ?? "firefox-default",
+        active: true,
+        incognito: false,
+        pinned: false,
+      };
+      tabsMap.set(id, restoredTab);
+      if (savedValues && savedValues.size > 0) {
+        tabSessionValues.set(id, new Map(savedValues));
+      }
+      await tabsOnCreated.emit({ ...restoredTab });
+      if (emitSessionsChangedBeforeRequest && browser.sessions) {
+        await sessionsOnChanged.emit();
+      }
+      const responses = [];
+      for (const fn of [...webRequestListeners.keys()]) {
+        responses.push(
+          await fn({
+            tabId: id,
+            type: "main_frame",
+            frameId: 0,
+            method: "GET",
+            url: closedTab.url,
+            cookieStoreId: restoredTab.cookieStoreId,
+          })
+        );
+      }
+      if (!responses.some((r) => r?.cancel)) {
+        restoredTab.url = closedTab.url;
+        await tabsOnUpdated.emit(
+          id,
+          { url: closedTab.url, status: "complete" },
+          { ...restoredTab }
+        );
+      }
+      return { tab: { ...restoredTab }, responses };
+    },
+    async simulateUndoCloseWindow() {
+      const idx = recentlyClosed.findIndex((entry) => entry.window);
+      if (idx === -1) {
+        return null;
+      }
+      const [popped] = recentlyClosed.splice(idx, 1);
+      const closedWin = popped.window;
+      const winSavedValues = closedSessionValues.get(closedWin.sessionId) ?? [];
+      closedSessionValues.delete(closedWin.sessionId);
+
+      windowsMap.set(closedWin.id, {
+        id: closedWin.id,
+        type: closedWin.type ?? "normal",
+        focused: true,
+      });
+      if (browser.sessions) {
+        await sessionsOnChanged.emit();
+      }
+      const restored = [];
+      for (let i = 0; i < closedWin.tabs.length; i += 1) {
+        const closedTab = closedWin.tabs[i];
+        const id = nextTabId++;
+        const tab = {
+          id,
+          windowId: closedWin.id,
+          index: i,
+          url: "about:blank",
+          cookieStoreId: closedTab.cookieStoreId ?? "firefox-default",
+          active: i === 0,
+          incognito: false,
+          pinned: false,
+        };
+        tabsMap.set(id, tab);
+        if (winSavedValues[i]) {
+          tabSessionValues.set(id, new Map(winSavedValues[i]));
+        }
+        await tabsOnCreated.emit({ ...tab });
+        const responses = [];
+        for (const fn of [...webRequestListeners.keys()]) {
+          responses.push(
+            await fn({
+              tabId: id,
+              type: "main_frame",
+              frameId: 0,
+              method: "GET",
+              url: closedTab.url,
+              cookieStoreId: tab.cookieStoreId,
+            })
+          );
+        }
+        restored.push({ tab: { ...tab }, responses });
+      }
+      return restored;
+    },
+    tabSessionValues,
   };
 }
 
@@ -1123,6 +1263,195 @@ test("13. Container-inherited external link restores the URL in its original tab
   assert.equal(mock.updatedTabsLog.length, 1);
   assert.equal(mock.updatedTabsLog[0].tabId, externalTab.id);
   assert.equal(mock.updatedTabsLog[0].props.url, targetUrl);
+
+  controller.destroy();
+});
+
+test("14. Cmd+Shift+T on closed container or Default tabs restores them directly without triggering the external-link picker or looping", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnNewTab: true, openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  // Open a tab in Social container (firefox-container-2), settle on about:newtab, visit reddit.com, then close it
+  const socialTab = await mock.browser.tabs.create({
+    windowId: 10,
+    cookieStoreId: "firefox-container-2",
+    url: "about:blank",
+    active: true,
+  });
+  await mock.simulateTabUpdate(socialTab.id, { url: "about:newtab" });
+  const typedUrl = "https://www.reddit.com/";
+  const navRes = await mock.simulateBeforeRequest({
+    tabId: socialTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: typedUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(navRes, [{}]);
+  await mock.simulateTabUpdate(socialTab.id, {
+    url: typedUrl,
+    status: "complete",
+  });
+
+  // Close the container tab
+  await mock.browser.tabs.remove(socialTab.id);
+  assert.equal(mock.recentlyClosed.length, 1);
+
+  const createdBefore = mock.createdTabsLog.length;
+  const updatedBefore = mock.updatedTabsLog.length;
+
+  // Cmd+Shift+T (even when onBeforeRequest races ahead of sessions.onChanged)
+  const restored = await mock.simulateUndoCloseTab({
+    emitSessionsChangedBeforeRequest: false,
+  });
+  assert.ok(restored);
+  assert.deepEqual(restored.responses, [{}]);
+  await new Promise((r) => setTimeout(r, 10));
+
+  // No picker tab was opened, restored tab was NOT removed, and recentlyClosed is now empty (no infinite loop!)
+  assert.equal(mock.createdTabsLog.length, createdBefore);
+  assert.equal(mock.updatedTabsLog.length, updatedBefore);
+  assert.equal(mock.tabsMap.has(restored.tab.id), true);
+  assert.equal(mock.recentlyClosed.length, 0);
+
+  // Second Cmd+Shift+T has nothing left to restore
+  assert.equal(await mock.simulateUndoCloseTab(), null);
+
+  // Closing and restoring a Default tab also works without hijacking
+  const defaultTab = await mock.simulateNewTab({
+    url: "about:blank",
+    cookieStoreId: "firefox-default",
+    openerTabId: 1,
+  });
+  await mock.simulateTabUpdate(defaultTab.id, {
+    url: "https://news.ycombinator.com/",
+    status: "complete",
+  });
+  await mock.browser.tabs.remove(defaultTab.id);
+
+  const restoredDefault = await mock.simulateUndoCloseTab();
+  assert.deepEqual(restoredDefault.responses, [{}]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.updatedTabsLog.length, updatedBefore);
+  assert.equal(mock.recentlyClosed.length, 0);
+
+  controller.destroy();
+});
+
+test("15. Cmd+Shift+T for a tab closed before extension startup and Cmd+Shift+N closed windows are never hijacked", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+    recentlyClosed: [
+      {
+        tab: {
+          windowId: 10,
+          sessionId: "pre-existing-closed-tab",
+          url: "https://preexisting.example.com/article",
+          cookieStoreId: "firefox-container-2",
+        },
+      },
+    ],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  // Tab closed before startup has no ntcp_seen tab value, but snapshot diff catches Cmd+Shift+T
+  const restoredPreExisting = await mock.simulateUndoCloseTab({
+    emitSessionsChangedBeforeRequest: false,
+  });
+  assert.deepEqual(restoredPreExisting.responses, [{}]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(mock.createdTabsLog.length, 0);
+  assert.equal(mock.recentlyClosed.length, 0);
+
+  // Close a second window with two tabs and restore it via Cmd+Shift+N
+  mock.windowsMap.set(20, { id: 20, type: "normal", focused: false });
+  const wTab1 = await mock.simulateNewTab({
+    windowId: 20,
+    url: "about:blank",
+    openerTabId: 1,
+    cookieStoreId: "firefox-container-1",
+  });
+  await mock.simulateTabUpdate(wTab1.id, {
+    url: "https://win-a.example.com/",
+    status: "complete",
+  });
+  const wTab2 = await mock.simulateNewTab({
+    windowId: 20,
+    url: "about:blank",
+    openerTabId: 1,
+    cookieStoreId: "firefox-default",
+  });
+  await mock.simulateTabUpdate(wTab2.id, {
+    url: "https://win-b.example.com/",
+    status: "complete",
+  });
+  await mock.browser.windows.remove(20);
+
+  const restoredWindowTabs = await mock.simulateUndoCloseWindow();
+  assert.equal(restoredWindowTabs.length, 2);
+  assert.deepEqual(restoredWindowTabs[0].responses, [{}]);
+  assert.deepEqual(restoredWindowTabs[1].responses, [{}]);
+
+  controller.destroy();
+});
+
+test("16. External link for the same URL as a recently closed tab is still intercepted, and cancelled container placeholder tabs are purged from Recently Closed Tabs", async () => {
+  const mock = createMockBrowser({
+    localStorage: { openOnExternalLink: true },
+    permissions: ["tabs", "sessions", "webRequest", "webRequestBlocking"],
+    origins: ["http://*/*", "https://*/*"],
+  });
+  const controller = createBackgroundController(mock.browser);
+  await controller.ensureInitialized();
+
+  const targetUrl = "https://github.com/org/repo/pull/99";
+
+  // User had targetUrl open in container 2, then closed it (WITHOUT pressing Cmd+Shift+T)
+  const closedUserTab = await mock.browser.tabs.create({
+    windowId: 10,
+    cookieStoreId: "firefox-container-2",
+    url: "about:blank",
+  });
+  await mock.simulateTabUpdate(closedUserTab.id, { url: "about:newtab" });
+  await mock.simulateTabUpdate(closedUserTab.id, {
+    url: targetUrl,
+    status: "complete",
+  });
+  await mock.browser.tabs.remove(closedUserTab.id);
+  assert.equal(mock.recentlyClosed.length, 1);
+
+  // Now Slack opens the EXACT SAME URL in a brand-new container-inherited tab -> MUST still show picker!
+  const slackTab = await mock.simulateNewTab({
+    url: targetUrl,
+    cookieStoreId: "firefox-container-2",
+    index: 2,
+  });
+  const slackRes = await mock.simulateBeforeRequest({
+    tabId: slackTab.id,
+    type: "main_frame",
+    frameId: 0,
+    method: "GET",
+    url: targetUrl,
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(slackRes, [{ cancel: true }]);
+
+  await new Promise((r) => setTimeout(r, 15));
+  // Cancelled container placeholder tab was removed AND forgotten from Recently Closed Tabs,
+  // leaving only the user's originally closed tab (no duplicate closed entry!)
+  assert.equal(mock.tabsMap.has(slackTab.id), false);
+  assert.equal(mock.recentlyClosed.length, 1);
+  assert.equal(mock.recentlyClosed[0].tab.url, targetUrl);
+  assert.equal(mock.forgottenTabsLog.length, 1);
 
   controller.destroy();
 });
