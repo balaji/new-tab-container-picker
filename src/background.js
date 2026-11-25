@@ -1,6 +1,10 @@
-import { buildPickerTabUrl } from "./background/browser-actions.js";
+import {
+  buildPickerTabUrl,
+  isOwnPickerUrl,
+} from "./background/browser-actions.js";
 import { createClosedSessionCleaner } from "./background/closed-session-cleaner.js";
 import { createExternalLinkWatcher } from "./background/external-link-watcher.js";
+import { createSessionRestoreTracker } from "./background/session-restore-tracker.js";
 import { createSettingsState } from "./background/settings-state.js";
 import { createTabWatcher } from "./background/tab-watcher.js";
 import {
@@ -52,7 +56,12 @@ export function createBackgroundController(browserApi, options = {}) {
     typeof options.debugLog === "function" ? options.debugLog : () => {};
 
   const settingsState = createSettingsState(browserApi);
-  const closedSessionCleaner = createClosedSessionCleaner(browserApi);
+  const sessionRestoreTracker = createSessionRestoreTracker(browserApi);
+  const closedSessionCleaner = createClosedSessionCleaner(browserApi, {
+    onSessionForgotten: (key) => sessionRestoreTracker.markSessionForgotten(key),
+    onRecentSnapshot: (remaining) =>
+      sessionRestoreTracker.updateSnapshot(remaining),
+  });
 
   const tabWatcher = createTabWatcher(browserApi, {
     isEnabled: () => settingsState.isNewTabModeEnabled(),
@@ -64,11 +73,24 @@ export function createBackgroundController(browserApi, options = {}) {
     isEnabled: () => settingsState.isExternalLinkModeEnabled(),
     isInitialized: () => settingsReady,
     isTabIgnored: (tabId) => tabWatcher.isTabIgnored(tabId),
+    isRestoredTab: (details) => sessionRestoreTracker.isRestoredTab(details),
+    onTabSettled: (tabId) => sessionRestoreTracker.markTabSeen(tabId),
     onExternalLinkDetected: (details) => openExternalLinkPicker(details),
     debugLog,
     candidateTtlMs: options.candidateTtlMs,
     coldCreateGraceMs: options.coldCreateGraceMs,
   });
+
+  async function stampExistingTabs() {
+    await sessionRestoreTracker.stampOpenTabs((tab) => {
+      const effectiveUrl = getEffectiveTabUrl(tab);
+      return (
+        externalLinkWatcher.hasCandidateTab(tab.id) ||
+        classifyTabUrl(effectiveUrl) === "pending" ||
+        isOwnPickerUrl(browserApi.runtime, effectiveUrl)
+      );
+    });
+  }
 
   async function openInTabPicker(tab) {
     let parentWindow;
@@ -257,6 +279,11 @@ export function createBackgroundController(browserApi, options = {}) {
           if (typeof pickerTab?.id === "number") {
             tabWatcher.ignoreTab(pickerTab.id);
           }
+          closedSessionCleaner.expectReplacedTab({
+            windowId: tabWindowId,
+            url,
+            cookieStoreId: tab.cookieStoreId,
+          });
           try {
             await browserApi.tabs.remove(tabId);
           } catch {
@@ -485,6 +512,7 @@ export function createBackgroundController(browserApi, options = {}) {
 
         const postTasks = [
           closedSessionCleaner.purge(),
+          stampExistingTabs(),
           verifyTabsPermission(),
           verifyExternalLinkPermissions(),
         ];
@@ -565,6 +593,7 @@ export function createBackgroundController(browserApi, options = {}) {
     browserApi.tabs?.onRemoved?.addListener(async (tabId) => {
       externalLinkWatcher.handleTabRemoved(tabId);
       tabWatcher.handleTabRemoved(tabId);
+      sessionRestoreTracker.handleTabRemoved(tabId);
       await closedSessionCleaner.purge();
     });
     browserApi.windows?.onRemoved?.addListener(async () => {
@@ -575,6 +604,7 @@ export function createBackgroundController(browserApi, options = {}) {
       if (added?.permissions?.includes("sessions")) {
         attachSessionsListener();
         await closedSessionCleaner.purge();
+        await stampExistingTabs();
       }
       if (
         added?.permissions?.includes("webRequest") ||
@@ -583,6 +613,9 @@ export function createBackgroundController(browserApi, options = {}) {
       ) {
         await ensureSettingsReady();
         syncWebRequestListener();
+        if (settingsState.isExternalLinkModeEnabled()) {
+          await stampExistingTabs();
+        }
       }
     });
     browserApi.permissions?.onRemoved?.addListener(async (removed) => {
@@ -615,6 +648,10 @@ export function createBackgroundController(browserApi, options = {}) {
       }
       if (extensionToggled || STORAGE_KEY_OPEN_ON_EXTERNAL_LINK in changes) {
         await verifyExternalLinkPermissions();
+        if (settingsState.isExternalLinkModeEnabled()) {
+          await stampExistingTabs();
+          await sessionRestoreTracker.syncRecentlyClosed();
+        }
       }
     });
     browserApi.runtime?.onMessage?.addListener?.(onRuntimeMessage);
@@ -638,6 +675,8 @@ export function createBackgroundController(browserApi, options = {}) {
       scheduledTimers.clear();
       tabWatcher.destroy();
       externalLinkWatcher.destroy();
+      closedSessionCleaner.destroy();
+      sessionRestoreTracker.destroy();
       browserApi.runtime?.onMessage?.removeListener?.(onRuntimeMessage);
       if (webRequestListenerAttached) {
         browserApi.webRequest?.onBeforeRequest?.removeListener?.(

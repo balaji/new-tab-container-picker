@@ -322,3 +322,74 @@ test("purge isolates failing entries, skips retrying failed IDs in-run, and resp
   assert.equal(await boundedCleaner.purge(), 2);
   assert.equal(passCount, 4);
 });
+
+test("expectReplacedTab forgets a cancelled container placeholder tab one-shot and reports forgotten session keys", async () => {
+  const recent = [
+    {
+      tab: {
+        windowId: 10,
+        sessionId: "t-placeholder",
+        url: "https://github.com/org/repo/pull/1#files",
+        cookieStoreId: "firefox-container-2",
+      },
+    },
+    {
+      tab: {
+        windowId: 10,
+        sessionId: "t-user-other-container",
+        url: "https://github.com/org/repo/pull/1",
+        cookieStoreId: "firefox-container-1",
+      },
+    },
+  ];
+  const forgottenKeys = [];
+  const forgottenTabs = [];
+
+  const cleaner = createClosedSessionCleaner(
+    {
+      runtime,
+      sessions: {
+        async getRecentlyClosed() {
+          return recent.slice();
+        },
+        async forgetClosedTab(windowId, sessionId) {
+          forgottenTabs.push([windowId, sessionId]);
+          const idx = recent.findIndex(
+            (e) =>
+              e.tab?.windowId === windowId && e.tab?.sessionId === sessionId
+          );
+          if (idx !== -1) recent.splice(idx, 1);
+        },
+      },
+    },
+    {
+      onSessionForgotten: (key) => forgottenKeys.push(key),
+    }
+  );
+
+  cleaner.expectReplacedTab({
+    windowId: 10,
+    url: "https://github.com/org/repo/pull/1",
+    cookieStoreId: "firefox-container-2",
+  });
+
+  assert.equal(await cleaner.purge(), 1);
+  assert.deepEqual(forgottenTabs, [[10, "t-placeholder"]]);
+  assert.deepEqual(forgottenKeys, ["t:10:t-placeholder"]);
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0].tab.sessionId, "t-user-other-container");
+
+  // One-shot: a later user tab closed with the same URL+container is preserved
+  recent.unshift({
+    tab: {
+      windowId: 10,
+      sessionId: "t-user-later",
+      url: "https://github.com/org/repo/pull/1",
+      cookieStoreId: "firefox-container-2",
+    },
+  });
+  assert.equal(await cleaner.purge(), 0);
+  assert.equal(recent.length, 2);
+
+  cleaner.destroy();
+});

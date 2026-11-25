@@ -562,3 +562,76 @@ test("externalLinkWatcher cold fallback intercepts a new tab already showing the
 
   watcher.destroy();
 });
+
+test("externalLinkWatcher skips session-restored tabs (Cmd+Shift+T) and stamps settled tabs without stamping intercepted tabs", async () => {
+  const detected = [];
+  const settled = [];
+  const restoredTabIds = new Set([80]);
+
+  const watcher = createExternalLinkWatcher(createMockExternalBrowser(), {
+    isEnabled: () => true,
+    isRestoredTab: async ({ tabId }) => restoredTabIds.has(tabId),
+    onTabSettled: (tabId) => settled.push(tabId),
+    onExternalLinkDetected: async (details) => {
+      detected.push(details);
+      return true;
+    },
+  });
+
+  // Tab 80 restored via Cmd+Shift+T: created with no opener, loads URL with no originUrl -> MUST NOT be intercepted
+  watcher.trackCreatedTab({
+    id: 80,
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(
+    await watcher.handleBeforeRequest({
+      tabId: 80,
+      type: "main_frame",
+      frameId: 0,
+      method: "GET",
+      url: "https://www.reddit.com/",
+      cookieStoreId: "firefox-container-2",
+    }),
+    {}
+  );
+  assert.deepEqual(detected, []);
+  assert.ok(settled.includes(80));
+
+  // Tab 81 is a genuine external link -> intercepted, NOT stamped as settled
+  watcher.trackCreatedTab({
+    id: 81,
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.deepEqual(
+    await watcher.handleBeforeRequest({
+      tabId: 81,
+      type: "main_frame",
+      frameId: 0,
+      method: "GET",
+      url: "https://www.reddit.com/",
+      cookieStoreId: "firefox-container-2",
+    }),
+    { cancel: true }
+  );
+  assert.deepEqual(detected, [{ tabId: 81, url: "https://www.reddit.com/" }]);
+  assert.equal(settled.includes(81), false);
+
+  // Tab 82 completes loading (e.g. opened by another extension with originUrl) -> drops candidate and stamps settled
+  watcher.trackCreatedTab({
+    id: 82,
+    url: "about:blank",
+    cookieStoreId: "firefox-container-2",
+  });
+  assert.equal(watcher.hasCandidateTab(82), true);
+  watcher.handleTabUpdated(
+    82,
+    { status: "complete" },
+    { id: 82, url: "https://www.reddit.com/", incognito: false }
+  );
+  assert.equal(watcher.hasCandidateTab(82), false);
+  assert.ok(settled.includes(82));
+
+  watcher.destroy();
+});
