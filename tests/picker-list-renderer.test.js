@@ -29,8 +29,20 @@ function createMinimalDom() {
       this.children = [];
       this.listeners = new Map();
       this.hidden = false;
-      this.textContent = "";
+      this._textContent = "";
       this.scrollCalls = [];
+    }
+    set textContent(val) {
+      this._textContent = String(val);
+    }
+    get textContent() {
+      if (this.children.length === 0) return this._textContent;
+      return (
+        this._textContent +
+        this.children
+          .map((c) => (typeof c === "string" ? c : c.textContent))
+          .join("")
+      );
     }
     setAttribute(k, v) {
       this.attrs.set(k, String(v));
@@ -173,4 +185,72 @@ test("createListRenderer renders rows, updates ARIA highlight/scroll, toggles em
   assert.equal(listEl.hidden, true);
   assert.equal(emptyStateEl.hidden, false);
   assert.equal(searchInput.getAttribute("aria-activedescendant"), null);
+});
+
+test("createListRenderer renders lowercase <kbd> shortcut badges next to container names and before Default badge", () => {
+  const { doc, listEl, emptyStateEl, searchInput } = createMinimalDom();
+  const renderer = createListRenderer({
+    doc,
+    listEl,
+    emptyStateEl,
+    searchInput,
+  });
+
+  const items = [
+    { cookieStoreId: "start", name: "WORK" },
+    { cookieStoreId: "mid", name: "Social" },
+    { cookieStoreId: "none", name: "Personal" },
+    { cookieStoreId: "firefox-default", name: "Default", isDefault: true },
+  ];
+  const shortcutChars = new Map([
+    ["start", "W"],
+    ["mid", "i"],
+    ["firefox-default", "e"],
+  ]);
+
+  renderer.render(items, 0, { shortcutChars });
+
+  const workRow = listEl.children[0];
+  assert.equal(workRow.children.length, 3);
+  assert.equal(workRow.children[1].textContent, "WORK");
+  assert.equal(workRow.children[1].children.length, 0);
+  assert.equal(workRow.children[2].tagName, "kbd");
+  assert.equal(workRow.children[2].className, "container-shortcut-key");
+  assert.equal(workRow.children[2].getAttribute("aria-hidden"), "true");
+  assert.equal(workRow.children[2].textContent, "w");
+
+  const socialRow = listEl.children[1];
+  assert.equal(socialRow.children.length, 3);
+  assert.equal(socialRow.children[1].textContent, "Social");
+  assert.equal(socialRow.children[1].children.length, 0);
+  assert.equal(socialRow.children[2].tagName, "kbd");
+  assert.equal(socialRow.children[2].className, "container-shortcut-key");
+  assert.equal(socialRow.children[2].getAttribute("aria-hidden"), "true");
+  assert.equal(socialRow.children[2].textContent, "i");
+
+  const personalRow = listEl.children[2];
+  assert.equal(personalRow.children.length, 2);
+  assert.equal(personalRow.children[1].textContent, "Personal");
+  assert.equal(personalRow.children[1].children.length, 0);
+
+  const defaultRow = listEl.children[3];
+  assert.equal(defaultRow.children.length, 4);
+  assert.equal(defaultRow.children[1].textContent, "Default");
+  assert.equal(defaultRow.children[1].children.length, 0);
+  assert.equal(defaultRow.children[2].tagName, "kbd");
+  assert.equal(defaultRow.children[2].className, "container-shortcut-key");
+  assert.equal(defaultRow.children[2].getAttribute("aria-hidden"), "true");
+  assert.equal(defaultRow.children[2].textContent, "e");
+  assert.equal(defaultRow.children[3].className, "container-badge");
+  assert.equal(defaultRow.children[3].textContent, "firefox-default");
+
+  // Omitting shortcutChars renders no <kbd> elements
+  renderer.render(items, 0);
+  for (const row of listEl.children) {
+    assert.equal(
+      row.children.some((c) => c.tagName === "kbd"),
+      false
+    );
+  }
+  assert.equal(listEl.children[1].children[1].textContent, "Social");
 });

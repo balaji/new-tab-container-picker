@@ -90,6 +90,59 @@ export function filterContainers(containers, query) {
   return scored.map((entry) => entry.item);
 }
 
+const ELIGIBLE_SHORTCUT_CHAR_RE = /^[\p{L}\p{N}]$/u;
+const COMBINING_MARK_START_RE = /^\p{M}/u;
+
+/**
+ * Compute the first unique single-character search shortcut (letter or digit)
+ * for each container. Typing that character alone matches only that container.
+ * @param {Array<{ cookieStoreId?: string, name?: string }>} containers
+ * @returns {Map<string, string>}
+ */
+export function computeUniqueShortcutChars(containers) {
+  const result = new Map();
+  if (!Array.isArray(containers) || containers.length === 0) {
+    return result;
+  }
+
+  const containerCounts = new Map();
+  for (const item of containers) {
+    const nameLower = String(item?.name ?? "").toLowerCase();
+    const seen = new Set();
+    for (const ch of nameLower) {
+      seen.add(ch);
+    }
+    for (const ch of seen) {
+      containerCounts.set(ch, (containerCounts.get(ch) ?? 0) + 1);
+    }
+  }
+
+  for (const item of containers) {
+    const key = item?.cookieStoreId;
+    if (typeof key !== "string" || key.length === 0) {
+      continue;
+    }
+    const name = String(item?.name ?? "");
+    let offset = 0;
+    for (const ch of name) {
+      const len = ch.length;
+      if (
+        ELIGIBLE_SHORTCUT_CHAR_RE.test(ch) &&
+        !COMBINING_MARK_START_RE.test(name.slice(offset + len))
+      ) {
+        const lower = ch.toLowerCase();
+        if (lower.length === 1 && containerCounts.get(lower) === 1) {
+          result.set(key, lower);
+          break;
+        }
+      }
+      offset += len;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Move selection index by delta with wrap-around across [0, length - 1].
  * @param {number} currentIndex

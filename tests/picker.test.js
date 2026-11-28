@@ -47,7 +47,12 @@ function createFakeDom(search = "") {
     }
     get textContent() {
       if (this.children.length === 0) return this._textContent;
-      return this._textContent + this.children.map((c) => c.textContent).join("");
+      return (
+        this._textContent +
+        this.children
+          .map((c) => (typeof c === "string" ? c : c.textContent))
+          .join("")
+      );
     }
     setAttribute(k, v) {
       this.attributes.set(k, String(v));
@@ -882,6 +887,127 @@ test("picker shows a visible error and stays usable when opening the tab fails",
   assert.equal(created.length, 1);
   assert.equal(created[0].url, target);
   assert.deepEqual(removed, [50]);
+
+  ctrl.destroy();
+});
+
+test("unique shortcut characters render only when autoOpenSingleMatch is enabled and unfiltered", async () => {
+  const { doc, win, searchInput, listEl } = createFakeDom();
+  const identities = [
+    { cookieStoreId: "c1", name: "WORK", colorCode: "#37adff" },
+    { cookieStoreId: "c2", name: "Social", colorCode: "#ff613d" },
+    { cookieStoreId: "c3", name: "Hobby", colorCode: "#00c79a" },
+    { cookieStoreId: "c4", name: "Doomscroll", colorCode: "#8f8f9d" },
+  ];
+
+  const getShortcutKbd = (row) =>
+    row.children.find(
+      (c) =>
+        typeof c !== "string" &&
+        c.tagName === "kbd" &&
+        c.className === "container-shortcut-key"
+    ) ?? null;
+
+  // Disabled: no key badges rendered
+  const offApi = createTestPickerApi({ identities, autoOpenSingleMatch: false });
+  const offDom = createFakeDom();
+  const offCtrl = await createPickerController({
+    browserApi: offApi.browserApi,
+    doc: offDom.doc,
+    win: offDom.win,
+  });
+  for (const row of offDom.listEl.children) {
+    assert.equal(row.children[1].children.length, 0);
+    assert.equal(getShortcutKbd(row), null);
+  }
+  offCtrl.destroy();
+
+  // Enabled: lowercase key badges rendered initially, hidden while typing, restored on clear, and typing unique char opens tab
+  const onApi = createTestPickerApi({ identities, autoOpenSingleMatch: true });
+  const onCtrl = await createPickerController({
+    browserApi: onApi.browserApi,
+    doc,
+    win,
+  });
+
+  const expectedKeys = ["w", "i", "h", "m", "e"];
+  expectedKeys.forEach((key, idx) => {
+    const row = listEl.children[idx];
+    const kbd = getShortcutKbd(row);
+    assert.ok(kbd, `Expected <kbd> badge on row ${idx}`);
+    assert.equal(kbd.textContent, key);
+    assert.equal(kbd.getAttribute("aria-hidden"), "true");
+    assert.equal(row.children[1].children.length, 0);
+  });
+
+  assert.equal(listEl.children[1].children[1].textContent, "Social");
+  const defaultRow = listEl.children[4];
+  assert.equal(defaultRow.children[1].textContent, "Default");
+  assert.equal(defaultRow.children[2].tagName, "kbd");
+  assert.equal(defaultRow.children.at(-1).className, "container-badge");
+
+  // Typing a non-unique query hides key badges
+  searchInput.value = "o";
+  searchInput.dispatchEvent({ type: "input" });
+  await Promise.resolve();
+  assert.equal(onApi.createdTabs.length, 0);
+  assert.ok(listEl.children.length > 1);
+  for (const row of listEl.children) {
+    assert.equal(getShortcutKbd(row), null);
+  }
+
+  // Clearing the query restores key badges
+  searchInput.value = "";
+  searchInput.dispatchEvent({ type: "input" });
+  await Promise.resolve();
+  assert.equal(getShortcutKbd(listEl.children[1])?.textContent, "i");
+
+  // Typing a shortcut key immediately opens that container
+  searchInput.value = "i";
+  searchInput.dispatchEvent({ type: "input" });
+  await Promise.resolve();
+  assert.deepEqual(onApi.createdTabs, [{ cookieStoreId: "c2", active: true }]);
+  assert.equal(win.closed, true);
+
+  onCtrl.destroy();
+});
+
+test("storage.onChanged for autoOpenSingleMatch toggles shortcut key badges live without auto-opening", async () => {
+  const { doc, win, listEl } = createFakeDom();
+  const { browserApi, createdTabs } = createTestPickerApi({
+    autoOpenSingleMatch: false,
+  });
+  const storageListeners = [];
+  browserApi.storage.onChanged = {
+    addListener: (fn) => storageListeners.push(fn),
+    removeListener: (fn) => storageListeners.splice(storageListeners.indexOf(fn), 1),
+  };
+
+  const ctrl = await createPickerController({ browserApi, doc, win });
+  const hasAnyShortcutBadge = () =>
+    listEl.children.some((row) =>
+      row.children.some(
+        (c) =>
+          typeof c !== "string" &&
+          c.tagName === "kbd" &&
+          c.className === "container-shortcut-key"
+      )
+    );
+
+  assert.equal(hasAnyShortcutBadge(), false);
+
+  storageListeners[0](
+    { autoOpenSingleMatch: { oldValue: false, newValue: true } },
+    "local"
+  );
+  assert.equal(hasAnyShortcutBadge(), true);
+  assert.equal(createdTabs.length, 0);
+
+  storageListeners[0](
+    { autoOpenSingleMatch: { oldValue: true, newValue: false } },
+    "local"
+  );
+  assert.equal(hasAnyShortcutBadge(), false);
 
   ctrl.destroy();
 });

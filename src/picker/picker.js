@@ -1,5 +1,10 @@
-import { filterContainers, getNextIndex } from "../lib/filter.js";
 import {
+  computeUniqueShortcutChars,
+  filterContainers,
+  getNextIndex,
+} from "../lib/filter.js";
+import {
+  STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH,
   STORAGE_KEY_EXTENSION_ENABLED,
   loadSettings,
   saveSettings,
@@ -39,6 +44,7 @@ export async function createPickerController(deps = {}) {
 
   let allContainers = [];
   let filteredContainers = [];
+  let shortcutChars = new Map();
   let activeIndex = 0;
   let autoOpenSingleMatch = false;
   let unavailableReason = null;
@@ -48,6 +54,10 @@ export async function createPickerController(deps = {}) {
   let extensionEnabled = true;
 
   const announcer = createStatusAnnouncer(announcerEl);
+
+  function getActiveShortcutChars(hasQuery) {
+    return autoOpenSingleMatch && !hasQuery ? shortcutChars : null;
+  }
 
   function focusSearchInput() {
     if (
@@ -110,6 +120,16 @@ export async function createPickerController(deps = {}) {
       const next = changes[STORAGE_KEY_EXTENSION_ENABLED]?.newValue;
       extensionEnabled = typeof next === "boolean" ? next : true;
       renderExtensionToggle();
+    }
+    if (STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH in changes) {
+      const next = changes[STORAGE_KEY_AUTO_OPEN_SINGLE_MATCH]?.newValue;
+      autoOpenSingleMatch = typeof next === "boolean" ? next : false;
+      if (!unavailableReason && !client.isSettled() && allContainers.length > 0) {
+        const hasQuery = searchInput.value.trim().length > 0;
+        listRenderer.render(filteredContainers, activeIndex, {
+          shortcutChars: getActiveShortcutChars(hasQuery),
+        });
+      }
     }
   }
 
@@ -177,7 +197,9 @@ export async function createPickerController(deps = {}) {
     const hasQuery = query.trim().length > 0;
     filteredContainers = filterContainers(allContainers, query);
     activeIndex = filteredContainers.length > 0 ? 0 : -1;
-    listRenderer.render(filteredContainers, activeIndex);
+    listRenderer.render(filteredContainers, activeIndex, {
+      shortcutChars: getActiveShortcutChars(hasQuery),
+    });
 
     const composing = isComposing || Boolean(event?.isComposing);
     if (
@@ -296,6 +318,7 @@ export async function createPickerController(deps = {}) {
     unavailableReason = loaded.unavailableReason;
     allContainers = [];
     filteredContainers = [];
+    shortcutChars = new Map();
     activeIndex = -1;
     autoOpenSingleMatch = false;
 
@@ -323,6 +346,7 @@ export async function createPickerController(deps = {}) {
     }
 
     allContainers = loaded.containers;
+    shortcutChars = computeUniqueShortcutChars(allContainers);
     autoOpenSingleMatch = loaded.autoOpenSingleMatch;
 
     if (!loaded.isPreview && searchInput.value.length > 0) {
@@ -330,7 +354,9 @@ export async function createPickerController(deps = {}) {
     } else {
       filteredContainers = allContainers.slice();
       activeIndex = filteredContainers.length > 0 ? 0 : -1;
-      listRenderer.render(filteredContainers, activeIndex);
+      listRenderer.render(filteredContainers, activeIndex, {
+        shortcutChars: getActiveShortcutChars(false),
+      });
     }
 
     if (!loaded.isPreview && !client.isSettled()) {

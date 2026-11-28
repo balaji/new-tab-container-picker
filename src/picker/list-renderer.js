@@ -109,8 +109,9 @@ export function createListRenderer({
    * Render the filtered list of containers and toggle empty state visibility.
    * @param {Array<object>} containers
    * @param {number} activeIndex
+   * @param {{ shortcutChars?: Map<string, string> | null }} [options]
    */
-  function render(containers, activeIndex) {
+  function render(containers, activeIndex, { shortcutChars = null } = {}) {
     const fragment = doc.createDocumentFragment();
 
     containers.forEach((container, index) => {
@@ -132,9 +133,18 @@ export function createListRenderer({
       const iconEl = createContainerIconElement(doc, container);
       const nameEl = doc.createElement("span");
       nameEl.className = "container-name";
-      nameEl.textContent = container.name;
+      nameEl.textContent = String(container.name ?? "");
 
       li.append(iconEl, nameEl);
+
+      const shortcutChar = shortcutChars?.get(container.cookieStoreId);
+      if (typeof shortcutChar === "string" && shortcutChar.length > 0) {
+        const shortcutEl = doc.createElement("kbd");
+        shortcutEl.className = "container-shortcut-key";
+        shortcutEl.setAttribute("aria-hidden", "true");
+        shortcutEl.textContent = shortcutChar.toLowerCase();
+        li.append(shortcutEl);
+      }
 
       if (container.isDefault) {
         const badgeEl = doc.createElement("span");
